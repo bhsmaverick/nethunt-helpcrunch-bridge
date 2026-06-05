@@ -222,9 +222,9 @@ authRegisterForm.addEventListener('submit', async (e) => {
         
         if (res.ok) {
             currentUsername = data.username;
-            // Generate QR Code using Google Charts API (pure client-side call)
+            // Generate QR Code using a working QR Code API (pure client-side call)
             const encodedUri = encodeURIComponent(data.provisioning_uri);
-            qrCodeImg.src = `https://chart.googleapis.com/chart?chs=200x200&chld=M|0&cht=qr&chl=${encodedUri}`;
+            qrCodeImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodedUri}`;
             qrSecretKey.textContent = data.twofa_secret;
             
             showAuthScreen('setup_2fa');
@@ -281,7 +281,7 @@ authLoginForm.addEventListener('submit', async (e) => {
             if (data.status === 'setup_2fa') {
                 // If 2FA scan wasn't complete
                 const encodedUri = encodeURIComponent(data.provisioning_uri);
-                qrCodeImg.src = `https://chart.googleapis.com/chart?chs=200x200&chld=M|0&cht=qr&chl=${encodedUri}`;
+                qrCodeImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodedUri}`;
                 qrSecretKey.textContent = data.twofa_secret;
                 showAuthScreen('setup_2fa');
             } else if (data.status === 'require_2fa') {
