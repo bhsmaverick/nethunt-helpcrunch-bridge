@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BridgeHC — NetHunt & HelpCrunch Integration Hub</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="glow-bg"></div>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">
+                    <i class="fa-solid fa-circle-nodes"></i>
+                </div>
+                <h2>Bridge<span>HC</span></h2>
+            </div>
+            
+            <nav class="nav-menu">
+                <button class="nav-btn active" data-tab="dashboard">
+                    <i class="fa-solid fa-chart-line"></i>
+                    Панель моніторингу
+                </button>
+                <button class="nav-btn" data-tab="settings">
+                    <i class="fa-solid fa-sliders"></i>
+                    Налаштування
+                </button>
+                <button class="nav-btn" data-tab="simulation">
+                    <i class="fa-solid fa-vial"></i>
+                    Симуляція вебхука
+                </button>
+                <button class="nav-btn" data-tab="guide">
+                    <i class="fa-solid fa-book-open"></i>
+                    Інструкція з налаштування
+                </button>
+            </nav>
+            
+            <div class="connection-status-panel">
+                <div class="status-item" id="hc-conn-status">
+                    <span class="status-dot offline"></span>
+                    HelpCrunch: <span class="status-text">Перевірка...</span>
+                </div>
+                <div class="status-item" id="nh-conn-status">
+                    <span class="status-dot offline"></span>
+                    NetHunt CRM: <span class="status-text">Перевірка...</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            
+            <!-- Header -->
+            <header class="main-header">
+                <div>
+                    <h1 id="page-title">Панель моніторингу</h1>
+                    <p id="page-subtitle" class="subtitle">Перегляд синхронізації та системних метрик у реальному часі</p>
+                </div>
+                <div class="sys-time">
+                    <i class="fa-regular fa-clock"></i>
+                    <span id="clock">00:00:00</span>
+                </div>
+            </header>
+
+            <!-- TAB 1: DASHBOARD -->
+            <section id="tab-dashboard" class="tab-content active">
+                <!-- Metrics Grid -->
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-icon blue">
+                            <i class="fa-solid fa-arrows-rotate"></i>
+                        </div>
+                        <div class="metric-data">
+                            <h3>Загальний синхрон</h3>
+                            <div class="value" id="metric-total">0</div>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon green">
+                            <i class="fa-solid fa-user-check"></i>
+                        </div>
+                        <div class="metric-data">
+                            <h3>Знайдено в CRM</h3>
+                            <div class="value" id="metric-matches">0</div>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon purple">
+                            <i class="fa-solid fa-percent"></i>
+                        </div>
+                        <div class="metric-data">
+                            <h3>Коефіцієнт збігів</h3>
+                            <div class="value" id="metric-rate">0%</div>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-icon red">
+                            <i class="fa-solid fa-triangle-exclamation"></i>
+                        </div>
+                        <div class="metric-data">
+                            <h3>Помилки з'єднання</h3>
+                            <div class="value" id="metric-errors">0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Logs and Active details -->
+                <div class="dashboard-body">
+                    <!-- Logs List Card -->
+                    <div class="card logs-card">
+                        <div class="card-header">
+                            <h2><i class="fa-solid fa-list-check"></i> Лог активності</h2>
+                            <div class="log-actions">
+                                <select id="log-filter-status" class="filter-select">
+                                    <option value="">Всі статуси</option>
+                                    <option value="success">Успішно</option>
+                                    <option value="no_match">Не знайдено</option>
+                                    <option value="error">Помилка</option>
+                                </select>
+                                <button id="btn-refresh-logs" class="btn btn-secondary btn-icon-only" title="Оновити">
+                                    <i class="fa-solid fa-arrows-rotate"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="card-body scrollable">
+                            <div id="logs-container" class="logs-list">
+                                <!-- Dynamic logs load here -->
+                                <div class="loading-state">
+                                    <i class="fa-solid fa-spinner fa-spin"></i>
+                                    Завантаження логів...
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Log Details Viewer -->
+                    <div class="card detail-card" id="detail-card">
+                        <div class="card-header">
+                            <h2><i class="fa-solid fa-magnifying-glass"></i> Деталі транзакції</h2>
+                        </div>
+                        <div class="card-body">
+                            <div id="detail-placeholder" class="detail-placeholder">
+                                <i class="fa-solid fa-circle-info"></i>
+                                <p>Виберіть рядок логу для перегляду детального покрокового процесу пошуку та оновлення даних.</p>
+                            </div>
+                            <div id="detail-content" class="detail-content hidden">
+                                <div class="detail-row">
+                                    <span class="label">Дата/Час:</span>
+                                    <span id="det-time" class="value"></span>
+                                </div>
+                                <div class="detail-row">
+                                    <span class="label">Тип події:</span>
+                                    <span id="det-event" class="value badge"></span>
+                                </div>
+                                <div class="detail-row">
+                                    <span class="label">Користувач:</span>
+                                    <span id="det-user" class="value bold"></span>
+                                </div>
+                                <div class="detail-row">
+                                    <span class="label">Контакти:</span>
+                                    <span id="det-contact" class="value"></span>
+                                </div>
+                                <div class="detail-row">
+                                    <span class="label">Статус:</span>
+                                    <span id="det-status" class="value badge"></span>
+                                </div>
+                                <div class="detail-trace-box">
+                                    <h4>Лог виконання операцій:</h4>
+                                    <pre id="det-trace"></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 2: SETTINGS -->
+            <section id="tab-settings" class="tab-content">
+                <div class="settings-grid">
+                    
+                    <!-- HelpCrunch Settings Card -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h2><i class="fa-solid fa-comments"></i> Налаштування HelpCrunch</h2>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-group">
+                                <label for="hc-api-key">HelpCrunch API Key (Bearer)</label>
+                                <input type="password" id="hc-api-key" placeholder="Введіть API токен...">
+                                <span class="help-text">Знаходиться в Settings → Developers → API Keys</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="hc-subdomain">Subdomain вашої компанії</label>
+                                <div class="input-addon-wrapper">
+                                    <input type="text" id="hc-subdomain" placeholder="mycompany">
+                                    <span class="addon">.helpcrunch.com</span>
+                                </div>
+                                <span class="help-text">Назва вашої організації для побудови посилань на діалоги</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="hc-webhook-secret">Webhook Signing Key (Optional)</label>
+                                <input type="password" id="hc-webhook-secret" placeholder="Введіть Webhook secret...">
+                                <span class="help-text">Рекомендується для захисту API (Settings → Developers → Webhooks)</span>
+                            </div>
+                            <button id="btn-test-hc" class="btn btn-secondary">
+                                <i class="fa-solid fa-circle-check"></i> Перевірити підключення
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- NetHunt CRM Settings Card -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h2><i class="fa-solid fa-address-card"></i> Налаштування NetHunt CRM</h2>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-group">
+                                <label for="nh-api-email">NetHunt CRM Email користувача</label>
+                                <input type="email" id="nh-api-email" placeholder="email@example.com">
+                            </div>
+                            <div class="form-group">
+                                <label for="nh-api-key">NetHunt CRM API Key</label>
+                                <input type="password" id="nh-api-key" placeholder="Введіть NetHunt API Key...">
+                                <span class="help-text">Створіть API ключ у налаштуваннях NetHunt CRM</span>
+                            </div>
+                            <div class="form-group">
+                                <label for="nh-base-url">NetHunt CRM Base URL</label>
+                                <input type="text" id="nh-base-url" value="https://nethunt.co">
+                                <span class="help-text">Зазвичай https://nethunt.co або https://nethunt.com</span>
+                            </div>
+                            <button id="btn-test-nh" class="btn btn-secondary">
+                                <i class="fa-solid fa-circle-check"></i> Перевірити підключення
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Folder Mapping Card -->
+                    <div class="card full-width">
+                        <div class="card-header">
+                            <h2><i class="fa-solid fa-folder-tree"></i> Відображення папок та полів</h2>
+                        </div>
+                        <div class="card-body grid-2-col">
+                            <div class="left-col">
+                                <div class="form-group">
+                                    <label for="nh-folder-contacts">Папка контактів NetHunt (Contacts)</label>
+                                    <select id="nh-folder-contacts">
+                                        <option value="">Спочатку підключіть NetHunt CRM...</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="nh-folder-deals">Папка угод NetHunt (Deals/Pipelines) [Необов'язково]</label>
+                                    <select id="nh-folder-deals">
+                                        <option value="">Спочатку підключіть NetHunt CRM...</option>
+                                    </select>
+                                    <span class="help-text">Використовується для вивантаження угод клієнта</span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="sync-priority">Пріоритет перевірки користувача</label>
+                                    <input type="text" id="sync-priority" value="email,phone,telegram">
+                                    <span class="help-text">Порядок пошуку через кому. Наприклад: <code>email,phone,telegram</code></span>
+                                </div>
+                            </div>
+                            
+                            <div class="right-col">
+                                <div class="form-group">
+                                    <label for="field-tg-hc">HelpCrunch поле Telegram (у customData)</label>
+                                    <input type="text" id="field-tg-hc" value="telegram" placeholder="telegram">
+                                    <span class="help-text">Назва поля в customData користувача HelpCrunch</span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="field-tg-nh">NetHunt поле Telegram</label>
+                                    <input type="text" id="field-tg-nh" value="Telegram" placeholder="Telegram">
+                                    <span class="help-text">Назва кастомного поля в NetHunt для Telegram</span>
+                                </div>
+                                <div class="form-group border-top">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="update-nh-chat-link">
+                                        <span>Передавати лінк на діалог HelpCrunch в NetHunt CRM</span>
+                                    </label>
+                                </div>
+                                <div class="form-group" id="nh-link-field-group">
+                                    <label for="field-link-nh">Поле NetHunt для лінка діалогу</label>
+                                    <input type="text" id="field-link-nh" value="HelpCrunch Chat Link" placeholder="HelpCrunch Chat Link">
+                                    <span class="help-text">Назва текстового поля в папці контактів NetHunt</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Controls -->
+                <div class="settings-actions">
+                    <button id="btn-save-settings" class="btn btn-primary btn-large">
+                        <i class="fa-solid fa-floppy-disk"></i> Зберегти конфігурацію
+                    </button>
+                    <span id="save-status-msg" class="save-status"></span>
+                </div>
+            </section>
+
+            <!-- TAB 3: SIMULATION -->
+            <section id="tab-simulation" class="tab-content">
+                <div class="card max-w-600">
+                    <div class="card-header">
+                        <h2><i class="fa-solid fa-vial-circle-check"></i> Симуляція вхідного Webhook</h2>
+                        <p class="subtitle">Емуляція запиту від HelpCrunch для перевірки бізнес-логіки інтеграції</p>
+                    </div>
+                    <div class="card-body">
+                        <form id="simulation-form">
+                            <div class="form-group">
+                                <label for="sim-event">Тип події</label>
+                                <select id="sim-event">
+                                    <option value="chat.new">Новий чат (chat.new)</option>
+                                    <option value="customer.new">Новий користувач (customer.new)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="sim-name">Ім'я клієнта</label>
+                                <input type="text" id="sim-name" value="Тестовий Клієнт" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="sim-email">Email адреса</label>
+                                <input type="email" id="sim-email" value="test@example.com">
+                            </div>
+                            <div class="form-group">
+                                <label for="sim-phone">Номер телефону</label>
+                                <input type="text" id="sim-phone" value="+380991234567">
+                            </div>
+                            <div class="form-group">
+                                <label for="sim-telegram">Telegram username</label>
+                                <div class="input-addon-wrapper">
+                                    <span class="addon">@</span>
+                                    <input type="text" id="sim-telegram" value="test_crm_user">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="sim-chat-id">ID діалогу HelpCrunch (chat.id)</label>
+                                <input type="number" id="sim-chat-id" value="12345">
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-large">
+                                <i class="fa-solid fa-play"></i> Запустити симуляцію
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 4: SETUP GUIDE -->
+            <section id="tab-guide" class="tab-content">
+                <div class="card">
+                    <div class="card-header">
+                        <h2><i class="fa-solid fa-circle-info"></i> Покрокове підключення сервісів</h2>
+                    </div>
+                    <div class="card-body guide-body">
+                        <h3>1. Налаштування Webhook в HelpCrunch</h3>
+                        <p>Для того щоб HelpCrunch передавав дані про чати та користувачів на цей міст, вам потрібно зареєструвати Webhook URL.</p>
+                        
+                        <div class="webhook-url-box">
+                            <label>Ваш Webhook Endpoint URL:</label>
+                            <div class="copy-url-wrapper">
+                                <input type="text" id="generated-webhook-url" readonly value="http://localhost:8088/api/webhook">
+                                <button id="btn-copy-webhook" class="btn btn-secondary">
+                                    <i class="fa-regular fa-copy"></i> Копіювати
+                                </button>
+                            </div>
+                            <span class="help-text">Скопіюйте це посилання та вставте його в кабінеті HelpCrunch.</span>
+                        </div>
+
+                        <ol class="guide-list">
+                            <li>Перейдіть до вашого кабінету <strong>HelpCrunch</strong>.</li>
+                            <li>Відкрийте <strong>Settings (Налаштування) → Developers (Розробники) → Webhooks</strong>.</li>
+                            <li>Натисніть <strong>Add Webhook (Додати Webhook)</strong>.</li>
+                            <li>Вставте скопійовану вище адресу в поле <strong>Payload URL</strong>.</li>
+                            <li>Виберіть формат передачі даних: <code>JSON</code>.</li>
+                            <li>Скопіюйте <strong>Webhook Signing Key</strong> (якщо хочете підтверджувати підписи) і збережіть його в налаштуваннях цього моста.</li>
+                            <li>Позначте події, на які сервіс повинен реагувати:
+                                <ul>
+                                    <li><code>chat.new</code> — Створення нового чату клієнтом (головна подія).</li>
+                                    <li><code>customer.new</code> — Реєстрація нового користувача.</li>
+                                    <li><code>message.chat.customer</code> — (За бажанням) Дозволить оновлювати CRM при першому повідомленні.</li>
+                                </ul>
+                            </li>
+                            <li>Натисніть <strong>Save (Зберегти)</strong>.</li>
+                        </ol>
+
+                        <hr class="guide-divider">
+
+                        <h3>2. Налаштування кастомних полів у NetHunt CRM</h3>
+                        <p>Щоб інтеграція працювала коректно за всіма каналами пошуку, переконайтеся, що у вашій папці контактів NetHunt створено відповідні поля:</p>
+                        <ul>
+                            <li><strong>Телефон</strong> та <strong>Email</strong> — стандартні поля NetHunt, які зазвичай присутні у всіх за замовчуванням.</li>
+                            <li><strong>Telegram</strong> — створіть поле типу <em>Text</em> або <em>Link</em> із назвою, що збігається із зазначеною у налаштуваннях моста (за замовчуванням: <code>Telegram</code>).</li>
+                            <li><strong>HelpCrunch Chat Link</strong> — створіть текстове поле для запису посилання на поточний діалог клієнта (за замовчуванням: <code>HelpCrunch Chat Link</code>). Це поле буде заповнюватися автоматично, що дозволить відкривати діалог HelpCrunch прямо з карти клієнта в NetHunt CRM.</li>
+                        </ul>
+
+                        <hr class="guide-divider">
+
+                        <h3>3. Автоматичне створення контактів у NetHunt CRM</h3>
+                        <p>Якщо за запитом у CRM не знайдено існуючого клієнта (за Email, номером телефону чи Telegram), система автоматично створює нову картку в NetHunt. Для створення картки використовуються такі дані з HelpCrunch:</p>
+                        
+                        <div class="field-mapping-table-wrapper">
+                            <table class="guide-table">
+                                <thead>
+                                    <tr>
+                                        <th>Дані з HelpCrunch</th>
+                                        <th>Поле в NetHunt CRM</th>
+                                        <th>Опис та налаштування</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td><strong>Ім'я клієнта</strong> (Name)</td>
+                                        <td><code>Name</code> (Стандартне)</td>
+                                        <td>Записується у стандартне поле імені картки контакту. Якщо ім'я відсутнє, створюється як "Unknown Customer".</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Email адреса</strong> (Email)</td>
+                                        <td>Кастомне поле для Email (За замовчуванням: <code>Email</code>)</td>
+                                        <td>Заповнюється значенням з поля емейлу в HelpCrunch. Поле NetHunt для запису налаштовується в параметрах.</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Номер телефону</strong> (Phone)</td>
+                                        <td>Кастомне поле для телефону (За замовчуванням: <code>Phone</code>)</td>
+                                        <td>Заповнюється номером телефону користувача. Назва поля NetHunt вказується у налаштуваннях.</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Telegram Username</strong> (customData)</td>
+                                        <td>Кастомне поле Telegram (За замовчуванням: <code>Telegram</code>)</td>
+                                        <td>Отримується із властивості customData (наприклад, <code>telegram</code>) у HelpCrunch. Символ <code>@</code> видаляється автоматично для чистоти пошуку.</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Посилання на діалог</strong> (Chat URL)</td>
+                                        <td>Кастомне поле діалогу (За замовчуванням: <code>HelpCrunch Chat Link</code>)</td>
+                                        <td>Записується пряме посилання на діалог в інбоксі HelpCrunch. Створюється відразу під час реєстрації картки (якщо активовано опцію двостороннього зв'язку).</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container"></div>
+
+    <!-- Custom JS -->
+    <script src="/static/app.js"></script>
+</body>
+</html>
