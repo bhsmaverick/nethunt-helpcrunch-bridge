@@ -169,9 +169,14 @@ async def api_auth_register(payload: RegisterRequest):
     
     conn.close()
     import segno
+    import io
+    import base64
     provisioning_uri = auth.get_totp_uri(totp_secret, payload.username)
     qr = segno.make(provisioning_uri)
-    qr_code_data_uri = qr.svg_data_uri(scale=4)
+    buf = io.BytesIO()
+    qr.save(buf, kind='png', scale=4)
+    qr_code_base64 = base64.b64encode(buf.getvalue()).decode()
+    qr_code_data_uri = f"data:image/png;base64,{qr_code_base64}"
     return {
         "status": "success",
         "username": payload.username,
@@ -241,9 +246,14 @@ async def api_auth_login(payload: LoginRequest):
     if not twofa_enabled:
         # User registered but didn't scan QR code yet
         import segno
+        import io
+        import base64
         provisioning_uri = auth.get_totp_uri(twofa_secret, payload.username)
         qr = segno.make(provisioning_uri)
-        qr_code_data_uri = qr.svg_data_uri(scale=4)
+        buf = io.BytesIO()
+        qr.save(buf, kind='png', scale=4)
+        qr_code_base64 = base64.b64encode(buf.getvalue()).decode()
+        qr_code_data_uri = f"data:image/png;base64,{qr_code_base64}"
         return {
             "status": "setup_2fa",
             "twofa_secret": twofa_secret,
