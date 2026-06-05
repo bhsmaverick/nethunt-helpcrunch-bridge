@@ -4,6 +4,7 @@ let foldersList = [];
 let logsList = [];
 let activeLogId = null;
 let pollInterval = null;
+let currentUsername = "";
 
 // --- DOM Elements ---
 const navButtons = document.querySelectorAll('.nav-btn');
@@ -12,6 +13,23 @@ const pageTitle = document.getElementById('page-title');
 const pageSubtitle = document.getElementById('page-subtitle');
 const clockEl = document.getElementById('clock');
 const toastContainer = document.getElementById('toast-container');
+
+// Auth DOM Elements
+const authOverlay = document.getElementById('auth-overlay');
+const authRegisterScreen = document.getElementById('auth-register-screen');
+const authSetup2faScreen = document.getElementById('auth-setup-2fa-screen');
+const authLoginScreen = document.getElementById('auth-login-screen');
+const authVerify2faScreen = document.getElementById('auth-verify-2fa-screen');
+const authError = document.getElementById('auth-error');
+
+const authRegisterForm = document.getElementById('auth-register-form');
+const authSetup2faForm = document.getElementById('auth-setup-2fa-form');
+const authLoginForm = document.getElementById('auth-login-form');
+const authVerify2faForm = document.getElementById('auth-verify-2fa-form');
+
+const qrCodeImg = document.getElementById('qr-code-img');
+const qrSecretKey = document.getElementById('qr-secret-key');
+const btnLogout = document.getElementById('btn-logout');
 
 // Settings inputs
 const hcApiKeyInput = document.getElementById('hc-api-key');
@@ -28,6 +46,18 @@ const fieldTgNhInput = document.getElementById('field-tg-nh');
 const checkboxUpdateNhChatLink = document.getElementById('update-nh-chat-link');
 const groupNhLinkField = document.getElementById('nh-link-field-group');
 const fieldLinkNhInput = document.getElementById('field-link-nh');
+
+// UTM mappings
+const utmSourceNhInput = document.getElementById('utm-source-nh');
+const utmMediumNhInput = document.getElementById('utm-medium-nh');
+const utmCampaignNhInput = document.getElementById('utm-campaign-nh');
+const utmTermNhInput = document.getElementById('utm-term-nh');
+const utmContentNhInput = document.getElementById('utm-content-nh');
+const gclidNhInput = document.getElementById('gclid-nh');
+const refererNhInput = document.getElementById('referer-nh');
+const sourceNhInput = document.getElementById('source-nh');
+const countryNhInput = document.getElementById('country-nh');
+const cityNhInput = document.getElementById('city-nh');
 
 // Connection statuses
 const hcConnStatusDot = document.querySelector('#hc-conn-status .status-dot');
@@ -133,12 +163,215 @@ btnCopyWebhook.addEventListener('click', () => {
     showToast('Посилання на Webhook скопійовано!', 'success');
 });
 
-// --- API Calls ---
+// --- Authentication & 2FA Flow ---
 
-// 1. Fetch & Populate settings
+function showAuthScreen(screen) {
+    authRegisterScreen.classList.add('hidden');
+    authSetup2faScreen.classList.add('hidden');
+    authLoginScreen.classList.add('hidden');
+    authVerify2faScreen.classList.add('hidden');
+    authError.classList.add('hidden');
+    
+    if (screen === 'register') authRegisterScreen.classList.remove('hidden');
+    else if (screen === 'setup_2fa') authSetup2faScreen.classList.remove('hidden');
+    else if (screen === 'login') authLoginScreen.classList.remove('hidden');
+    else if (screen === 'verify_2fa') authVerify2faScreen.classList.remove('hidden');
+}
+
+function showAuthError(msg) {
+    authError.textContent = msg;
+    authError.classList.remove('hidden');
+}
+
+// Check auth status on load
+async function checkAuthStatus() {
+    try {
+        const res = await fetch('/api/auth/status');
+        const data = await res.json();
+        
+        if (data.status === 'unregistered') {
+            authOverlay.classList.remove('hidden');
+            showAuthScreen('register');
+        } else if (data.status === 'unauthenticated') {
+            authOverlay.classList.remove('hidden');
+            showAuthScreen('login');
+        } else if (data.status === 'authenticated') {
+            authOverlay.classList.add('hidden');
+            currentUsername = data.username;
+            initializeDashboard();
+        }
+    } catch (err) {
+        console.error(err);
+        showToast('Помилка перевірки авторизації', 'error');
+    }
+}
+
+// 1. Submit Registration Form
+authRegisterForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const username = document.getElementById('reg-username').value.trim();
+    const password = document.getElementById('reg-password').value;
+    
+    try {
+        const res = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+        const data = await res.json();
+        
+        if (res.ok) {
+            currentUsername = data.username;
+            // Generate QR Code using Google Charts API (pure client-side call)
+            const encodedUri = encodeURIComponent(data.provisioning_uri);
+            qrCodeImg.src = `https://chart.googleapis.com/chart?chs=200x200&chld=M|0&cht=qr&chl=${encodedUri}`;
+            qrSecretKey.textContent = data.twofa_secret;
+            
+            showAuthScreen('setup_2fa');
+            showToast('Адміністратора створено! Налаштуйте 2FA', 'success');
+        } else {
+            showAuthError(data.detail || 'Помилка реєстрації');
+        }
+    } catch {
+        showAuthError('Не вдалося зв\'язатися з сервером.');
+    }
+});
+
+// 2. Submit Setup 2FA Confirm Form
+authSetup2faForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const token = document.getElementById('setup-totp-token').value.trim();
+    
+    try {
+        const res = await fetch('/api/auth/verify-2fa', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: currentUsername, token })
+        });
+        const data = await res.json();
+        
+        if (res.ok) {
+            authOverlay.classList.add('hidden');
+            showToast('Двофакторну автентифікацію успішно підключено!', 'success');
+            initializeDashboard();
+        } else {
+            showAuthError(data.detail || 'Невірний 2FA код');
+        }
+    } catch {
+        showAuthError('Не вдалося підтвердити 2FA.');
+    }
+});
+
+// 3. Submit Login Form
+authLoginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+    
+    try {
+        const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+        const data = await res.json();
+        
+        if (res.ok) {
+            currentUsername = username;
+            if (data.status === 'setup_2fa') {
+                // If 2FA scan wasn't complete
+                const encodedUri = encodeURIComponent(data.provisioning_uri);
+                qrCodeImg.src = `https://chart.googleapis.com/chart?chs=200x200&chld=M|0&cht=qr&chl=${encodedUri}`;
+                qrSecretKey.textContent = data.twofa_secret;
+                showAuthScreen('setup_2fa');
+            } else if (data.status === 'require_2fa') {
+                showAuthScreen('verify_2fa');
+            }
+        } else {
+            showAuthError(data.detail || 'Невірне ім\'я користувача або пароль');
+        }
+    } catch {
+        showAuthError('Не вдалося зв\'язатися з сервером.');
+    }
+});
+
+// 4. Submit 2FA Code Login Verification Form
+authVerify2faForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const token = document.getElementById('login-totp-token').value.trim();
+    
+    try {
+        const res = await fetch('/api/auth/login-2fa', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: currentUsername, token })
+        });
+        const data = await res.json();
+        
+        if (res.ok) {
+            authOverlay.classList.add('hidden');
+            showToast('Вхід виконано!', 'success');
+            initializeDashboard();
+        } else {
+            showAuthError(data.detail || 'Невірний 2FA код');
+        }
+    } catch {
+        showAuthError('Помилка входу.');
+    }
+});
+
+// 5. Logout Trigger
+btnLogout.addEventListener('click', async () => {
+    try {
+        const res = await fetch('/api/auth/logout', { method: 'POST' });
+        if (res.ok) {
+            // Stop polling
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+            currentUsername = "";
+            authOverlay.classList.remove('hidden');
+            showAuthScreen('login');
+            showToast('Ви вийшли з системи', 'info');
+        }
+    } catch {
+        showToast('Помилка виходу', 'error');
+    }
+});
+
+// --- API Helpers (Automatically handle 401 Unauthorized Session Expired) ---
+async function secureFetch(url, options = {}) {
+    const res = await fetch(url, options);
+    if (res.status === 401) {
+        if (pollInterval) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+        }
+        authOverlay.classList.remove('hidden');
+        showAuthScreen('login');
+        showToast('Сесія завершилась. Увійдіть знову.', 'error');
+        throw new Error('Unauthorized');
+    }
+    return res;
+}
+
+// --- Dashboard & Settings Logic ---
+
+function initializeDashboard() {
+    loadSettings();
+    refreshMetricsAndLogs();
+    
+    // Start Polling every 5 seconds
+    if (!pollInterval) {
+        pollInterval = setInterval(refreshMetricsAndLogs, 5000);
+    }
+}
+
+// Fetch & Populate settings
 async function loadSettings() {
     try {
-        const res = await fetch('/api/settings');
+        const res = await secureFetch('/api/settings');
         const settings = await res.json();
         currentSettings = settings;
         
@@ -153,6 +386,18 @@ async function loadSettings() {
         fieldTgHcInput.value = settings.telegram_field_hc || 'telegram';
         fieldTgNhInput.value = settings.telegram_field_nh || 'Telegram';
         fieldLinkNhInput.value = settings.nh_chat_link_field || 'HelpCrunch Chat Link';
+        
+        // Populate UTM tracking inputs
+        utmSourceNhInput.value = settings.utm_source_field_nh || 'utm_source';
+        utmMediumNhInput.value = settings.utm_medium_field_nh || 'utm_medium';
+        utmCampaignNhInput.value = settings.utm_campaign_field_nh || 'utm_campaign';
+        utmTermNhInput.value = settings.utm_term_field_nh || 'utm_term';
+        utmContentNhInput.value = settings.utm_content_field_nh || 'utm_content';
+        gclidNhInput.value = settings.gclid_field_nh || 'gclid';
+        refererNhInput.value = settings.referer_field_nh || 'Referer';
+        sourceNhInput.value = settings.source_field_nh || 'Source';
+        countryNhInput.value = settings.country_field_nh || 'Country';
+        cityNhInput.value = settings.city_field_nh || 'City';
         
         checkboxUpdateNhChatLink.checked = settings.update_nh_chat_link === 'true';
         if (checkboxUpdateNhChatLink.checked) {
@@ -170,7 +415,6 @@ async function loadSettings() {
         
     } catch (err) {
         console.error(err);
-        showToast('Помилка завантаження конфігурації', 'error');
     }
 }
 
@@ -181,7 +425,7 @@ async function testConnectionsQuietly() {
     
     if (currentSettings.helpcrunch_api_key) {
         try {
-            const res = await fetch('/api/test-helpcrunch', {
+            const res = await secureFetch('/api/test-helpcrunch', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ key: currentSettings.helpcrunch_api_key })
@@ -200,7 +444,7 @@ async function testConnectionsQuietly() {
     
     if (currentSettings.nethunt_api_email && currentSettings.nethunt_api_key) {
         try {
-            const res = await fetch('/api/test-nethunt', {
+            const res = await secureFetch('/api/test-nethunt', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -232,7 +476,7 @@ function updateConnDot(dotEl, textEl, status, text) {
 // Load NetHunt Folders into options select
 async function loadFoldersQuietly() {
     try {
-        const res = await fetch('/api/nethunt/folders', {
+        const res = await secureFetch('/api/nethunt/folders', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -273,9 +517,9 @@ function populateFolderOptions() {
     });
 }
 
-// 2. Test HelpCrunch Button Handler
+// Test HelpCrunch Button Handler
 document.getElementById('btn-test-hc').addEventListener('click', async () => {
-    const key = hcApiKeyInput.value.strip ? hcApiKeyInput.value.strip() : hcApiKeyInput.value;
+    const key = hcApiKeyInput.value.trim();
     if (!key) {
         showToast('Введіть API ключ для тесту', 'error');
         return;
@@ -287,7 +531,7 @@ document.getElementById('btn-test-hc').addEventListener('click', async () => {
     btn.disabled = true;
     
     try {
-        const res = await fetch('/api/test-helpcrunch', {
+        const res = await secureFetch('/api/test-helpcrunch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ key })
@@ -308,7 +552,7 @@ document.getElementById('btn-test-hc').addEventListener('click', async () => {
     }
 });
 
-// 3. Test NetHunt Button Handler
+// Test NetHunt Button Handler
 document.getElementById('btn-test-nh').addEventListener('click', async () => {
     const email = nhApiEmailInput.value.trim();
     const key = nhApiKeyInput.value.trim();
@@ -325,7 +569,7 @@ document.getElementById('btn-test-nh').addEventListener('click', async () => {
     btn.disabled = true;
     
     try {
-        const res = await fetch('/api/test-nethunt', {
+        const res = await secureFetch('/api/test-nethunt', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, key, base_url })
@@ -336,7 +580,7 @@ document.getElementById('btn-test-nh').addEventListener('click', async () => {
             updateConnDot(nhConnStatusDot, nhConnStatusText, 'online', 'Активний');
             
             // Fetch and update folders select options immediately
-            const fRes = await fetch('/api/nethunt/folders', {
+            const fRes = await secureFetch('/api/nethunt/folders', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email, key, base_url })
@@ -358,7 +602,7 @@ document.getElementById('btn-test-nh').addEventListener('click', async () => {
     }
 });
 
-// 4. Save Config Form Handler
+// Save Config Form Handler
 document.getElementById('btn-save-settings').addEventListener('click', async () => {
     const payload = {
         helpcrunch_api_key: hcApiKeyInput.value.trim(),
@@ -372,10 +616,22 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
         sync_priority: syncPriorityInput.value.trim(),
         telegram_field_hc: fieldTgHcInput.value.trim(),
         telegram_field_nh: fieldTgNhInput.value.trim(),
-        phone_field_nh: 'Phone', // Default standard CRM search parameter
-        email_field_nh: 'Email', // Default
+        phone_field_nh: 'Phone',
+        email_field_nh: 'Email',
         update_nh_chat_link: checkboxUpdateNhChatLink.checked ? 'true' : 'false',
-        nh_chat_link_field: fieldLinkNhInput.value.trim()
+        nh_chat_link_field: fieldLinkNhInput.value.trim(),
+        
+        // Include UTM mapping fields
+        utm_source_field_nh: utmSourceNhInput.value.trim(),
+        utm_medium_field_nh: utmMediumNhInput.value.trim(),
+        utm_campaign_field_nh: utmCampaignNhInput.value.trim(),
+        utm_term_field_nh: utmTermNhInput.value.trim(),
+        utm_content_field_nh: utmContentNhInput.value.trim(),
+        gclid_field_nh: gclidNhInput.value.trim(),
+        referer_field_nh: refererNhInput.value.trim(),
+        source_field_nh: sourceNhInput.value.trim(),
+        country_field_nh: countryNhInput.value.trim(),
+        city_field_nh: cityNhInput.value.trim()
     };
     
     const saveStatus = document.getElementById('save-status-msg');
@@ -383,7 +639,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
     saveStatus.className = 'save-status';
     
     try {
-        const res = await fetch('/api/settings', {
+        const res = await secureFetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -410,7 +666,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
     }
 });
 
-// 5. Simulation Form Submit
+// Simulation Form Submit
 simulationForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     
@@ -420,11 +676,16 @@ simulationForm.addEventListener('submit', async (e) => {
         email: document.getElementById('sim-email').value,
         phone: document.getElementById('sim-phone').value,
         telegram: document.getElementById('sim-telegram').value,
-        chat_id: parseInt(document.getElementById('sim-chat-id').value) || null
+        chat_id: parseInt(document.getElementById('sim-chat-id').value) || null,
+        // UTM parameters simulator attributes
+        utm_source: document.getElementById('sim-utm-source').value || "",
+        utm_medium: document.getElementById('sim-utm-medium').value || "",
+        utm_campaign: document.getElementById('sim-utm-campaign').value || "",
+        gclid: document.getElementById('sim-gclid').value || ""
     };
     
     try {
-        const res = await fetch('/api/simulate-webhook', {
+        const res = await secureFetch('/api/simulate-webhook', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -432,7 +693,6 @@ simulationForm.addEventListener('submit', async (e) => {
         const data = await res.json();
         if (res.ok) {
             showToast('Симуляцію webhook запущено в чергу!', 'success');
-            // Switch to dashboard tab to watch the log
             setTimeout(() => {
                 document.querySelector('.nav-btn[data-tab="dashboard"]').click();
                 refreshMetricsAndLogs();
@@ -445,11 +705,13 @@ simulationForm.addEventListener('submit', async (e) => {
     }
 });
 
-// 6. Metrics & Logs Polling
+// Metrics & Logs Polling
 async function refreshMetricsAndLogs() {
+    if (!currentUsername) return; // Wait until authenticated
+    
     // Fetch metrics
     try {
-        const res = await fetch('/api/metrics');
+        const res = await secureFetch('/api/metrics');
         const metrics = await res.json();
         
         metricTotal.textContent = metrics.total_syncs || 0;
@@ -464,7 +726,7 @@ async function refreshMetricsAndLogs() {
     try {
         const statusFilter = logFilterStatus.value;
         const url = `/api/logs?limit=50${statusFilter ? `&status=${statusFilter}` : ''}`;
-        const res = await fetch(url);
+        const res = await secureFetch(url);
         const logs = await res.json();
         logsList = logs;
         
@@ -488,8 +750,6 @@ function renderLogs() {
     let html = '';
     logsList.forEach(log => {
         const isSelected = activeLogId === log.id ? 'active' : '';
-        
-        // Time parsing
         const timeStr = new Date(log.timestamp).toLocaleTimeString();
         
         let statusBadge = '';
@@ -513,7 +773,6 @@ function renderLogs() {
     
     logsContainer.innerHTML = html;
     
-    // Auto-update details view if selected log exists
     if (activeLogId) {
         const selectedLog = logsList.find(l => l.id === activeLogId);
         if (selectedLog) {
@@ -524,18 +783,12 @@ function renderLogs() {
 
 window.selectLog = function(logId) {
     activeLogId = logId;
-    
-    // Toggle active class visually
     const rows = document.querySelectorAll('.log-row');
     rows.forEach(row => row.classList.remove('active'));
     
-    // Re-render to ensure selection highlights stay correct
     const selectedLog = logsList.find(l => l.id === logId);
     if (selectedLog) {
         updateDetailsPanel(selectedLog);
-        
-        // Find row manually and add active class to prevent fully re-rendering immediately
-        // (better user experience, no blinking)
         const matchedRow = Array.from(rows).find(row => row.outerHTML.includes(selectedLog.customer_name) && row.outerHTML.includes(new Date(selectedLog.timestamp).toLocaleTimeString()));
         if (matchedRow) matchedRow.classList.add('active');
     }
@@ -547,7 +800,7 @@ function updateDetailsPanel(log) {
     
     detTime.textContent = new Date(log.timestamp).toLocaleString();
     detEvent.textContent = log.event_type;
-    detEvent.className = 'value badge success'; // Event reset style
+    detEvent.className = 'value badge success';
     
     detUser.textContent = log.customer_name;
     
@@ -568,9 +821,5 @@ logFilterStatus.addEventListener('change', refreshMetricsAndLogs);
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
-    loadSettings();
-    refreshMetricsAndLogs();
-    
-    // Start Polling every 5 seconds
-    pollInterval = setInterval(refreshMetricsAndLogs, 5000);
+    checkAuthStatus();
 });

@@ -140,6 +140,38 @@ async def update_contact_chat_link(email: str, api_key: str, base_url: str, reco
         logger.exception(f"NetHunt update contact chat link error for record '{record_id}':")
         return False
 
+async def update_contact(email: str, api_key: str, base_url: str, record_id: str, fields: dict) -> bool:
+    """
+    Updates fields on an existing NetHunt Contact.
+    """
+    if not record_id or not fields:
+        return False
+        
+    url = f"{_clean_base_url(base_url)}/api/v1/zapier/actions/update-record/{record_id}"
+    headers = _get_auth_headers(email, api_key)
+    
+    # Map fields to NetHunt fieldActions structure
+    field_actions = {}
+    for key, val in fields.items():
+        if val is not None and val != "":
+            field_actions[key] = {
+                "overwrite": True,
+                "add": val
+            }
+            
+    payload = {"fieldActions": field_actions}
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=headers, json=payload, timeout=10.0)
+            if response.status_code in (200, 201):
+                return True
+            logger.warning(f"Failed to update NetHunt contact fields: Status {response.status_code}, Body {response.text}")
+            return False
+    except Exception as e:
+        logger.exception(f"NetHunt update contact error for record '{record_id}':")
+        return False
+
 async def create_contact(email: str, api_key: str, base_url: str, folder_id: str, fields: dict) -> dict:
     """
     Creates a new contact record in NetHunt CRM.

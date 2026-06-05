@@ -23,6 +23,18 @@ def init_db():
     )
     """)
     
+    # Users table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        salt TEXT NOT NULL,
+        twofa_secret TEXT,
+        twofa_enabled INTEGER DEFAULT 0
+    )
+    """)
+    
     # Logs table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS logs (
@@ -53,7 +65,17 @@ def init_db():
         "phone_field_nh": "Phone",        # NetHunt CRM field name
         "email_field_nh": "Email",        # NetHunt CRM field name
         "update_nh_chat_link": "false",   # Boolean string
-        "nh_chat_link_field": "HelpCrunch Chat Link" # NetHunt CRM field name
+        "nh_chat_link_field": "HelpCrunch Chat Link", # NetHunt CRM field name
+        "utm_source_field_nh": "utm_source",
+        "utm_medium_field_nh": "utm_medium",
+        "utm_campaign_field_nh": "utm_campaign",
+        "utm_term_field_nh": "utm_term",
+        "utm_content_field_nh": "utm_content",
+        "gclid_field_nh": "gclid",
+        "referer_field_nh": "Referer",
+        "source_field_nh": "Source",
+        "country_field_nh": "Country",
+        "city_field_nh": "City"
     }
     
     for key, val in defaults.items():

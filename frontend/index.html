@@ -44,6 +44,7 @@
                 </button>
             </nav>
             
+            <!-- Connection status and logout -->
             <div class="connection-status-panel">
                 <div class="status-item" id="hc-conn-status">
                     <span class="status-dot offline"></span>
@@ -53,6 +54,10 @@
                     <span class="status-dot offline"></span>
                     NetHunt CRM: <span class="status-text">Перевірка...</span>
                 </div>
+                <button id="btn-logout" class="nav-btn logout-btn" style="margin-top: 1rem; border-color: rgba(239, 68, 68, 0.2); color: var(--danger);">
+                    <i class="fa-solid fa-right-from-bracket"></i>
+                    Вихід
+                </button>
             </div>
         </aside>
 
@@ -133,7 +138,6 @@
                         </div>
                         <div class="card-body scrollable">
                             <div id="logs-container" class="logs-list">
-                                <!-- Dynamic logs load here -->
                                 <div class="loading-state">
                                     <i class="fa-solid fa-spinner fa-spin"></i>
                                     Завантаження логів...
@@ -246,7 +250,7 @@
                     <!-- Folder Mapping Card -->
                     <div class="card full-width">
                         <div class="card-header">
-                            <h2><i class="fa-solid fa-folder-tree"></i> Відображення папок та полів</h2>
+                            <h2><i class="fa-solid fa-folder-tree"></i> Відображення папок та полів контактів</h2>
                         </div>
                         <div class="card-body grid-2-col">
                             <div class="left-col">
@@ -291,6 +295,59 @@
                                     <label for="field-link-nh">Поле NetHunt для лінка діалогу</label>
                                     <input type="text" id="field-link-nh" value="HelpCrunch Chat Link" placeholder="HelpCrunch Chat Link">
                                     <span class="help-text">Назва текстового поля в папці контактів NetHunt</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- UTM & Tracking Fields Mapping Card -->
+                    <div class="card full-width">
+                        <div class="card-header">
+                            <h2><i class="fa-solid fa-chart-simple"></i> Поля відстеження UTM, джерел та локації у NetHunt CRM</h2>
+                        </div>
+                        <div class="card-body grid-2-col">
+                            <div class="left-col">
+                                <div class="form-group">
+                                    <label for="utm-source-nh">Поле NetHunt для UTM Source</label>
+                                    <input type="text" id="utm-source-nh" value="utm_source">
+                                </div>
+                                <div class="form-group">
+                                    <label for="utm-medium-nh">Поле NetHunt для UTM Medium</label>
+                                    <input type="text" id="utm-medium-nh" value="utm_medium">
+                                </div>
+                                <div class="form-group">
+                                    <label for="utm-campaign-nh">Поле NetHunt для UTM Campaign</label>
+                                    <input type="text" id="utm-campaign-nh" value="utm_campaign">
+                                </div>
+                                <div class="form-group">
+                                    <label for="utm-term-nh">Поле NetHunt для UTM Term</label>
+                                    <input type="text" id="utm-term-nh" value="utm_term">
+                                </div>
+                                <div class="form-group">
+                                    <label for="utm-content-nh">Поле NetHunt для UTM Content</label>
+                                    <input type="text" id="utm-content-nh" value="utm_content">
+                                </div>
+                            </div>
+                            <div class="right-col">
+                                <div class="form-group">
+                                    <label for="gclid-nh">Поле NetHunt для Gclid (Google Click ID)</label>
+                                    <input type="text" id="gclid-nh" value="gclid">
+                                </div>
+                                <div class="form-group">
+                                    <label for="referer-nh">Поле NetHunt для реферера (Referer)</label>
+                                    <input type="text" id="referer-nh" value="Referer">
+                                </div>
+                                <div class="form-group">
+                                    <label for="source-nh">Поле NetHunt для джерела (Source URL)</label>
+                                    <input type="text" id="source-nh" value="Source">
+                                </div>
+                                <div class="form-group">
+                                    <label for="country-nh">Поле NetHunt для країни (Country Code)</label>
+                                    <input type="text" id="country-nh" value="Country">
+                                </div>
+                                <div class="form-group">
+                                    <label for="city-nh">Поле NetHunt для міста (City)</label>
+                                    <input type="text" id="city-nh" value="City">
                                 </div>
                             </div>
                         </div>
@@ -341,7 +398,29 @@
                                     <input type="text" id="sim-telegram" value="test_crm_user">
                                 </div>
                             </div>
+                            
+                            <!-- Tracking attributes simulation -->
+                            <div class="form-group border-top">
+                                <label>Симуляція UTM параметрів відстеження</label>
+                            </div>
                             <div class="form-group">
+                                <label for="sim-utm-source">UTM Source</label>
+                                <input type="text" id="sim-utm-source" value="google">
+                            </div>
+                            <div class="form-group">
+                                <label for="sim-utm-medium">UTM Medium</label>
+                                <input type="text" id="sim-utm-medium" value="cpc">
+                            </div>
+                            <div class="form-group">
+                                <label for="sim-utm-campaign">UTM Campaign</label>
+                                <input type="text" id="sim-utm-campaign" value="black_friday">
+                            </div>
+                            <div class="form-group">
+                                <label for="sim-gclid">Gclid (Google Click ID)</label>
+                                <input type="text" id="sim-gclid" value="gclid_test_123456789">
+                            </div>
+                            
+                            <div class="form-group border-top">
                                 <label for="sim-chat-id">ID діалогу HelpCrunch (chat.id)</label>
                                 <input type="number" id="sim-chat-id" value="12345">
                             </div>
@@ -448,6 +527,94 @@
                 </div>
             </section>
         </main>
+    </div>
+
+    <!-- Auth Overlay Panel -->
+    <div id="auth-overlay" class="auth-overlay hidden">
+        <div class="auth-card">
+            <div class="auth-brand">
+                <div class="brand-icon">
+                    <i class="fa-solid fa-circle-nodes"></i>
+                </div>
+                <h2>Bridge<span>HC</span></h2>
+            </div>
+            
+            <!-- 1. Registration Screen -->
+            <div id="auth-register-screen" class="auth-screen hidden">
+                <h3>Реєстрація адміністратора</h3>
+                <p class="subtitle">Створіть єдиного адміністратора для доступу до панелі</p>
+                <form id="auth-register-form">
+                    <div class="form-group">
+                        <label for="reg-username">Ім'я користувача</label>
+                        <input type="text" id="reg-username" required placeholder="admin">
+                    </div>
+                    <div class="form-group">
+                        <label for="reg-password">Пароль</label>
+                        <input type="password" id="reg-password" required placeholder="••••••••">
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="width: 100%;">
+                        <i class="fa-solid fa-user-plus"></i> Зареєструватись
+                    </button>
+                </form>
+            </div>
+
+            <!-- 2. Setup 2FA Screen (QR Code display) -->
+            <div id="auth-setup-2fa-screen" class="auth-screen hidden">
+                <h3>Двофакторна автентифікація</h3>
+                <p class="subtitle">Відскануйте QR-код вашим додатком Google/Microsoft Authenticator</p>
+                
+                <div class="qr-code-box">
+                    <img id="qr-code-img" src="" alt="QR Code для сканування">
+                    <div id="qr-secret-key" class="qr-secret-key"></div>
+                </div>
+                
+                <form id="auth-setup-2fa-form">
+                    <div class="form-group">
+                        <label for="setup-totp-token">Введіть 6-значний код для підтвердження</label>
+                        <input type="text" id="setup-totp-token" required maxlength="6" placeholder="123456" style="text-align:center; font-size:1.5rem; letter-spacing:4px;">
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="width: 100%;">
+                        <i class="fa-solid fa-lock-open"></i> Підтвердити та активувати
+                    </button>
+                </form>
+            </div>
+
+            <!-- 3. Login Screen -->
+            <div id="auth-login-screen" class="auth-screen hidden">
+                <h3>Вхід у систему</h3>
+                <p class="subtitle">Введіть ваші дані для входу</p>
+                <form id="auth-login-form">
+                    <div class="form-group">
+                        <label for="login-username">Ім'я користувача</label>
+                        <input type="text" id="login-username" required placeholder="admin">
+                    </div>
+                    <div class="form-group">
+                        <label for="login-password">Пароль</label>
+                        <input type="password" id="login-password" required placeholder="••••••••">
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="width: 100%;">
+                        <i class="fa-solid fa-right-to-bracket"></i> Увійти
+                    </button>
+                </form>
+            </div>
+
+            <!-- 4. Verify 2FA Login Screen -->
+            <div id="auth-verify-2fa-screen" class="auth-screen hidden">
+                <h3>Код підтвердження 2FA</h3>
+                <p class="subtitle">Введіть 6-значний код з додатку автентифікатора</p>
+                <form id="auth-verify-2fa-form">
+                    <div class="form-group">
+                        <label for="login-totp-token">6-значний код автентифікації</label>
+                        <input type="text" id="login-totp-token" required maxlength="6" placeholder="123456" style="text-align:center; font-size:1.5rem; letter-spacing:4px;">
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="width: 100%;">
+                        <i class="fa-solid fa-lock-open"></i> Перевірити код
+                    </button>
+                </form>
+            </div>
+            
+            <div id="auth-error" class="auth-error-msg hidden"></div>
+        </div>
     </div>
 
     <!-- Toast Notifications -->

@@ -1,7 +1,8 @@
 import logging
 import json
 import os
-from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Header
+import sqlite3
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Header, Depends, Response, Cookie
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,8 +10,9 @@ from pydantic import BaseModel
 from typing import Optional
 
 # Import local modules
-from .database import init_db, get_settings, save_settings, add_log, get_logs, get_metrics
+from .database import init_db, get_settings, save_settings, add_log, get_logs, get_metrics, get_db_connection
 from .services import nethunt, helpcrunch
+from . import auth
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO)
@@ -44,13 +46,23 @@ async def get_index():
     index_path = os.path.join(frontend_dir, "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
-    return "<h3>Error: index.html not found. Please create the frontend files first.</h3>"
+    return "<h3>Error: index.html not found.</h3>"
 
-# Mount static folder (will contain css & js)
+# Mount static folder
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# Request Models
+# --- Authentication Dependency ---
+def get_current_user(session_id: Optional[str] = Cookie(None)):
+    """Validates session cookie and returns username, else raises HTTP 401."""
+    if not session_id:
+        raise HTTPException(status_code=401, detail="Session cookie missing. Please log in.")
+    username = auth.verify_session_token(session_id)
+    if not username:
+        raise HTTPException(status_code=401, detail="Session expired or invalid. Please log in again.")
+    return username
+
+# --- Pydantic Models ---
 class SettingsUpdate(BaseModel):
     helpcrunch_api_key: str
     helpcrunch_subdomain: str
@@ -67,6 +79,16 @@ class SettingsUpdate(BaseModel):
     email_field_nh: Optional[str] = "Email"
     update_nh_chat_link: Optional[str] = "false"
     nh_chat_link_field: Optional[str] = "HelpCrunch Chat Link"
+    utm_source_field_nh: Optional[str] = "utm_source"
+    utm_medium_field_nh: Optional[str] = "utm_medium"
+    utm_campaign_field_nh: Optional[str] = "utm_campaign"
+    utm_term_field_nh: Optional[str] = "utm_term"
+    utm_content_field_nh: Optional[str] = "utm_content"
+    gclid_field_nh: Optional[str] = "gclid"
+    referer_field_nh: Optional[str] = "Referer"
+    source_field_nh: Optional[str] = "Source"
+    country_field_nh: Optional[str] = "Country"
+    city_field_nh: Optional[str] = "City"
 
 class TestConnectionRequest(BaseModel):
     email: Optional[str] = ""
@@ -80,14 +102,195 @@ class SimulateWebhookRequest(BaseModel):
     phone: str
     telegram: str
     chat_id: Optional[int] = None
+    utm_source: Optional[str] = ""
+    utm_medium: Optional[str] = ""
+    utm_campaign: Optional[str] = ""
+    gclid: Optional[str] = ""
 
-# Settings Endpoints
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class TokenVerificationRequest(BaseModel):
+    username: str
+    token: str
+
+# --- Authentication API Routes ---
+
+@app.get("/api/auth/status")
+async def api_auth_status(session_id: Optional[str] = Cookie(None)):
+    """Checks if the user is authenticated."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM users")
+    total_users = cursor.fetchone()[0]
+    conn.close()
+    
+    if total_users == 0:
+        return {"status": "unregistered", "message": "No users registered yet. Registration is open."}
+        
+    if not session_id:
+        return {"status": "unauthenticated"}
+        
+    username = auth.verify_session_token(session_id)
+    if username:
+        return {"status": "authenticated", "username": username}
+        
+    return {"status": "unauthenticated"}
+
+@app.post("/api/auth/register")
+async def api_auth_register(payload: RegisterRequest):
+    """Registers the first admin user and generates TOTP 2FA secret."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Restrict registration to single tenant admin
+    cursor.execute("SELECT COUNT(*) FROM users")
+    if cursor.fetchone()[0] > 0:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Registration is closed. Administrator already exists.")
+        
+    pwd_hash, salt = auth.hash_password(payload.password)
+    totp_secret = auth.generate_totp_secret()
+    
+    try:
+        cursor.execute(
+            "INSERT INTO users (username, password_hash, salt, twofa_secret, twofa_enabled) VALUES (?, ?, ?, ?, 0)",
+            (payload.username, pwd_hash, salt, totp_secret)
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Username already exists.")
+    
+    conn.close()
+    provisioning_uri = auth.get_totp_uri(totp_secret, payload.username)
+    return {
+        "status": "success",
+        "username": payload.username,
+        "twofa_secret": totp_secret,
+        "provisioning_uri": provisioning_uri
+    }
+
+@app.post("/api/auth/verify-2fa")
+async def api_auth_verify_2fa(payload: TokenVerificationRequest, response: Response):
+    """Verifies the initial 2FA token during registration, enables 2FA, and sets session cookie."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    row = cursor.execute("SELECT twofa_secret, twofa_enabled FROM users WHERE username = ?", (payload.username,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=400, detail="User not found.")
+        
+    secret = row["twofa_secret"]
+    
+    if not auth.verify_totp_token(secret, payload.token):
+        conn.close()
+        raise HTTPException(status_code=400, detail="Invalid 2FA token.")
+        
+    # Enable 2FA on database
+    cursor.execute("UPDATE users SET twofa_enabled = 1 WHERE username = ?", (payload.username,))
+    conn.commit()
+    conn.close()
+    
+    # Establish Session
+    session_token = auth.create_session_token(payload.username)
+    response.set_cookie(
+        key="session_id",
+        value=session_token,
+        httponly=True,
+        samesite="lax",
+        secure=False,  # Set True in production over HTTPS
+        max_age=86400  # 24 hours
+    )
+    return {"status": "success", "username": payload.username}
+
+@app.post("/api/auth/login")
+async def api_auth_login(payload: LoginRequest):
+    """Validates login credentials and checks if 2FA code is needed."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    row = cursor.execute(
+        "SELECT password_hash, salt, twofa_enabled, twofa_secret FROM users WHERE username = ?",
+        (payload.username,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row:
+        raise HTTPException(status_code=400, detail="Invalid username or password.")
+        
+    pwd_hash = row["password_hash"]
+    salt = row["salt"]
+    twofa_enabled = row["twofa_enabled"]
+    twofa_secret = row["twofa_secret"]
+    
+    if not auth.verify_password(payload.password, pwd_hash, salt):
+        raise HTTPException(status_code=400, detail="Invalid username or password.")
+        
+    if not twofa_enabled:
+        # User registered but didn't scan QR code yet
+        provisioning_uri = auth.get_totp_uri(twofa_secret, payload.username)
+        return {
+            "status": "setup_2fa",
+            "twofa_secret": twofa_secret,
+            "provisioning_uri": provisioning_uri
+        }
+        
+    return {"status": "require_2fa"}
+
+@app.post("/api/auth/login-2fa")
+async def api_auth_login_2fa(payload: TokenVerificationRequest, response: Response):
+    """Validates the 2FA token during login and establishes a session cookie."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    row = cursor.execute("SELECT twofa_secret FROM users WHERE username = ?", (payload.username,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=400, detail="User not found.")
+        
+    secret = row["twofa_secret"]
+    
+    if not auth.verify_totp_token(secret, payload.token):
+        conn.close()
+        raise HTTPException(status_code=400, detail="Invalid 2FA token.")
+        
+    conn.close()
+    
+    # Establish Session
+    session_token = auth.create_session_token(payload.username)
+    response.set_cookie(
+        key="session_id",
+        value=session_token,
+        httponly=True,
+        samesite="lax",
+        secure=False,
+        max_age=86400
+    )
+    return {"status": "success", "username": payload.username}
+
+@app.post("/api/auth/logout")
+async def api_auth_logout(response: Response, username: str = Depends(get_current_user)):
+    """Logs the user out by deleting their session cookie."""
+    response.delete_cookie(key="session_id")
+    return {"status": "success", "message": "Successfully logged out."}
+
+
+# --- Secured Settings & Logs Endpoints (Protected by get_current_user) ---
+
 @app.get("/api/settings")
-async def api_get_settings():
+async def api_get_settings(username: str = Depends(get_current_user)):
     return get_settings()
 
 @app.post("/api/settings")
-async def api_save_settings(payload: SettingsUpdate):
+async def api_save_settings(payload: SettingsUpdate, username: str = Depends(get_current_user)):
     try:
         updated = save_settings(payload.dict())
         return {"status": "success", "settings": updated}
@@ -95,34 +298,34 @@ async def api_save_settings(payload: SettingsUpdate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/logs")
-async def api_get_logs(limit: int = 100, status: Optional[str] = None):
+async def api_get_logs(limit: int = 100, status: Optional[str] = None, username: str = Depends(get_current_user)):
     return get_logs(limit=limit, status_filter=status)
 
 @app.get("/api/metrics")
-async def api_get_metrics():
+async def api_get_metrics(username: str = Depends(get_current_user)):
     return get_metrics()
 
-# Connection Test Endpoints
 @app.post("/api/test-nethunt")
-async def api_test_nethunt(payload: TestConnectionRequest):
+async def api_test_nethunt(payload: TestConnectionRequest, username: str = Depends(get_current_user)):
     success = await nethunt.test_connection(payload.email, payload.key, payload.base_url)
     if success:
         return {"status": "success", "message": "Successfully connected to NetHunt CRM"}
     raise HTTPException(status_code=400, detail="Failed to connect to NetHunt CRM. Please check your credentials.")
 
 @app.post("/api/test-helpcrunch")
-async def api_test_helpcrunch(payload: TestConnectionRequest):
+async def api_test_helpcrunch(payload: TestConnectionRequest, username: str = Depends(get_current_user)):
     success = await helpcrunch.test_connection(payload.key)
     if success:
         return {"status": "success", "message": "Successfully connected to HelpCrunch API"}
     raise HTTPException(status_code=400, detail="Failed to connect to HelpCrunch. Please check your credentials.")
 
 @app.post("/api/nethunt/folders")
-async def api_nethunt_folders(payload: TestConnectionRequest):
+async def api_nethunt_folders(payload: TestConnectionRequest, username: str = Depends(get_current_user)):
     folders = await nethunt.list_folders(payload.email, payload.key, payload.base_url)
     return folders
 
-# Webhook Synchronizer Business Logic
+# --- Webhook Synchronizer Business Logic ---
+
 async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optional[int] = None):
     settings = get_settings()
     hc_api_key = settings.get("helpcrunch_api_key")
@@ -140,32 +343,77 @@ async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optio
     nh_link_field = settings.get("nh_chat_link_field", "HelpCrunch Chat Link")
     hc_subdomain = settings.get("helpcrunch_subdomain", "")
 
+    # Load new UTM tracking key configurations
+    utm_src_f = settings.get("utm_source_field_nh", "utm_source")
+    utm_med_f = settings.get("utm_medium_field_nh", "utm_medium")
+    utm_cam_f = settings.get("utm_campaign_field_nh", "utm_campaign")
+    utm_trm_f = settings.get("utm_term_field_nh", "utm_term")
+    utm_cnt_f = settings.get("utm_content_field_nh", "utm_content")
+    gclid_f = settings.get("gclid_field_nh", "gclid")
+    referer_f = settings.get("referer_field_nh", "Referer")
+    source_f = settings.get("source_field_nh", "Source")
+    country_f = settings.get("country_field_nh", "Country")
+    city_f = settings.get("city_field_nh", "City")
+
     customer_id = customer_data.get("id")
     cust_name = customer_data.get("name") or "Unknown Customer"
     cust_email = customer_data.get("email") or ""
     cust_phone = customer_data.get("phone") or ""
+    cust_referer = customer_data.get("referer") or ""
+    cust_source = customer_data.get("source") or ""
+    location_data = customer_data.get("location", {}) or {}
+    cust_country = location_data.get("countryCode") or ""
+    cust_city = location_data.get("city") or ""
 
-    # Parse Telegram handle
+    # Parse customData (for Telegram and UTM parameters)
     telegram_handle = ""
+    utm_source = ""
+    utm_medium = ""
+    utm_campaign = ""
+    utm_term = ""
+    utm_content = ""
+    gclid = ""
+    
     custom_data = customer_data.get("customData")
     if custom_data:
         if isinstance(custom_data, list):
             for item in custom_data:
                 if isinstance(item, dict):
                     prop = item.get("property") or item.get("name")
+                    val = item.get("value") or ""
                     if prop == telegram_hc_key:
-                        telegram_handle = item.get("value") or ""
-                        break
+                        telegram_handle = val
+                    elif prop == "utm_source":
+                        utm_source = val
+                    elif prop == "utm_medium":
+                        utm_medium = val
+                    elif prop == "utm_campaign":
+                        utm_campaign = val
+                    elif prop == "utm_term":
+                        utm_term = val
+                    elif prop == "utm_content":
+                        utm_content = val
+                    elif prop == "gclid":
+                        gclid = val
         elif isinstance(custom_data, dict):
             telegram_handle = custom_data.get(telegram_hc_key) or ""
+            utm_source = custom_data.get("utm_source") or ""
+            utm_medium = custom_data.get("utm_medium") or ""
+            utm_campaign = custom_data.get("utm_campaign") or ""
+            utm_term = custom_data.get("utm_term") or ""
+            utm_content = custom_data.get("utm_content") or ""
+            gclid = custom_data.get("gclid") or ""
             
-    # Remove @ from Telegram handle if present for clean search queries
+    # Clean Telegram handle
     if telegram_handle and telegram_handle.startswith("@"):
         telegram_handle = telegram_handle[1:]
 
     details_log = []
     details_log.append(f"Starting processing for Event: {event_type}")
-    details_log.append(f"Customer details: ID={customer_id}, Name='{cust_name}', Email='{cust_email}', Phone='{cust_phone}', Telegram='{telegram_handle}'")
+    details_log.append(f"Customer info: ID={customer_id}, Name='{cust_name}', Email='{cust_email}', Phone='{cust_phone}', Telegram='{telegram_handle}'")
+    details_log.append(f"Tracking: Source='{cust_source}', Referer='{cust_referer}', Country='{cust_country}', City='{cust_city}'")
+    if utm_source or utm_medium or utm_campaign or gclid:
+        details_log.append(f"UTMs: src='{utm_source}', med='{utm_medium}', cam='{utm_campaign}', gclid='{gclid}'")
 
     if not hc_api_key or not nh_email or not nh_key or not contacts_folder:
         err_msg = "Aborted: Credentials or folder mapping missing in Settings."
@@ -173,6 +421,19 @@ async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optio
         add_log(event_type, cust_name, cust_email, cust_phone, "error", "\n".join(details_log))
         logger.error(err_msg)
         return
+
+    # Build UTM tracking fields payload to update/write in NetHunt CRM
+    tracking_fields = {}
+    if utm_src_f and utm_source: tracking_fields[utm_src_f] = utm_source
+    if utm_med_f and utm_medium: tracking_fields[utm_med_f] = utm_medium
+    if utm_cam_f and utm_campaign: tracking_fields[utm_cam_f] = utm_campaign
+    if utm_trm_f and utm_term: tracking_fields[utm_trm_f] = utm_term
+    if utm_cnt_f and utm_content: tracking_fields[utm_cnt_f] = utm_content
+    if gclid_f and gclid: tracking_fields[gclid_f] = gclid
+    if referer_f and cust_referer: tracking_fields[referer_f] = cust_referer
+    if source_f and cust_source: tracking_fields[source_f] = cust_source
+    if country_f and cust_country: tracking_fields[country_f] = cust_country
+    if city_f and cust_city: tracking_fields[city_f] = cust_city
 
     # Sequentially look up contact in NetHunt
     contact = None
@@ -214,6 +475,9 @@ async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optio
         if telegram_handle and telegram_nh_key:
             new_fields[telegram_nh_key] = telegram_handle
             
+        # Append UTM tracking fields to create-record payload
+        new_fields.update(tracking_fields)
+            
         # If chat link update is configured, append the link immediately in creation payload
         if update_nh_link and chat_id and hc_subdomain:
             chat_url = f"https://{hc_subdomain.strip()}.helpcrunch.com/inbox/chats/{chat_id}"
@@ -225,10 +489,22 @@ async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optio
             is_new_contact = True
             search_method_used = "Auto-Created Card"
             details_log.append(f"Successfully created NetHunt Contact record ID: {contact.get('id')}")
+            if tracking_fields:
+                details_log.append(f"Wrote UTM & Referrer variables: {list(tracking_fields.keys())}")
         else:
             details_log.append("Failed to create new NetHunt contact card. Aborting.")
             add_log(event_type, cust_name, cust_email, cust_phone, "error", "\n".join(details_log))
             return
+    else:
+        # Existing contact was matched -> Update their UTM parameters
+        contact_id = contact.get("id")
+        if tracking_fields:
+            details_log.append(f"Existing client matched. Updating NetHunt CRM tracking fields: {list(tracking_fields.keys())}...")
+            updated_utm = await nethunt.update_contact(nh_email, nh_key, nh_base, contact_id, tracking_fields)
+            if updated_utm:
+                details_log.append("NetHunt contact tracking fields updated successfully.")
+            else:
+                details_log.append("Warning: Could not update NetHunt contact tracking fields.")
 
     contact_id = contact.get("id")
     contact_name = contact.get("name") or cust_name
@@ -319,11 +595,10 @@ async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optio
         else:
             details_log.append(f"Warning: Failed to update contact card field '{nh_link_field}' (ensure field exists in NetHunt Contacts folder).")
 
-
     add_log(event_type, cust_name, cust_email, cust_phone, "success", "\n".join(details_log))
     logger.info(f"Sync task completed successfully for customer {cust_name}")
 
-# Webhook Handler Endpoint
+# Webhook Handler Endpoint (NOT protected - verified via HMAC)
 @app.post("/api/webhook")
 async def webhook_handler(
     request: Request,
@@ -362,11 +637,9 @@ async def webhook_handler(
     elif event == "customer.new":
         customer_data = event_data
     elif event == "message.chat.customer":
-        # Supports syncing when user sends their first message in a chat
         customer_data = event_data.get("customer") or {}
         chat_id = event_data.get("chat", {}).get("id") if isinstance(event_data.get("chat"), dict) else event_data.get("chat")
     else:
-        # Ignore other event types quietly to prevent webhooks retry loops
         return {"status": "ignored", "reason": f"Unhandled event type: {event}"}
         
     if not customer_data or not customer_data.get("id"):
@@ -377,21 +650,41 @@ async def webhook_handler(
     
     return {"status": "queued", "event": event}
 
-# Simulate / Trigger manual tests from Frontend UI
+# Simulate / Trigger manual tests (Protected by get_current_user)
 @app.post("/api/simulate-webhook")
-async def simulate_webhook(payload: SimulateWebhookRequest, background_tasks: BackgroundTasks):
+async def simulate_webhook(
+    payload: SimulateWebhookRequest,
+    background_tasks: BackgroundTasks,
+    username: str = Depends(get_current_user)
+):
     custom_data = []
     if payload.telegram:
         settings = get_settings()
         tg_field = settings.get("telegram_field_hc", "telegram")
         custom_data.append({"property": tg_field, "value": payload.telegram})
+    
+    # Append simulated UTMs
+    if payload.utm_source:
+        custom_data.append({"property": "utm_source", "value": payload.utm_source})
+    if payload.utm_medium:
+        custom_data.append({"property": "utm_medium", "value": payload.utm_medium})
+    if payload.utm_campaign:
+        custom_data.append({"property": "utm_campaign", "value": payload.utm_campaign})
+    if payload.gclid:
+        custom_data.append({"property": "gclid", "value": payload.gclid})
         
     mock_customer = {
         "id": 9999999,
         "name": payload.name,
         "email": payload.email,
         "phone": payload.phone,
-        "customData": custom_data
+        "customData": custom_data,
+        "referer": "https://google.com/",
+        "source": "https://example.com/landing-page",
+        "location": {
+            "countryCode": "UA",
+            "city": "Kyiv"
+        }
     }
     
     background_tasks.add_task(process_sync_task, payload.event, mock_customer, payload.chat_id)
