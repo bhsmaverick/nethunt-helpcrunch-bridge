@@ -168,12 +168,16 @@ async def api_auth_register(payload: RegisterRequest):
         raise HTTPException(status_code=400, detail="Username already exists.")
     
     conn.close()
+    import segno
     provisioning_uri = auth.get_totp_uri(totp_secret, payload.username)
+    qr = segno.make(provisioning_uri)
+    qr_code_data_uri = qr.svg_data_uri(scale=4)
     return {
         "status": "success",
         "username": payload.username,
         "twofa_secret": totp_secret,
-        "provisioning_uri": provisioning_uri
+        "provisioning_uri": provisioning_uri,
+        "qr_code_data_uri": qr_code_data_uri
     }
 
 @app.post("/api/auth/verify-2fa")
@@ -236,11 +240,15 @@ async def api_auth_login(payload: LoginRequest):
         
     if not twofa_enabled:
         # User registered but didn't scan QR code yet
+        import segno
         provisioning_uri = auth.get_totp_uri(twofa_secret, payload.username)
+        qr = segno.make(provisioning_uri)
+        qr_code_data_uri = qr.svg_data_uri(scale=4)
         return {
             "status": "setup_2fa",
             "twofa_secret": twofa_secret,
-            "provisioning_uri": provisioning_uri
+            "provisioning_uri": provisioning_uri,
+            "qr_code_data_uri": qr_code_data_uri
         }
         
     return {"status": "require_2fa"}
