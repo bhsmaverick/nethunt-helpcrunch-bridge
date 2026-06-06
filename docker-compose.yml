@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  bridge-app:
+    build: .
+    container_name: nethunt-helpcrunch-bridge
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    # If you want to persist the SQLite database, uncomment the lines below.
+    # Note: Since the DB is created in the backend folder, mounting a volume there 
+    # might overwrite your code. Consider moving the DB path in database.py to a /data folder.
+    # volumes:
+    #   - bridge_data:/app/backend
+
+# volumes:
+#   bridge_data:
