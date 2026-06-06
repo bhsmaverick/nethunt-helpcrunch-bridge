@@ -19,3 +19,4 @@ backend/bridge.db
 *.njsproj
 *.sln
 *.swp
+data/
