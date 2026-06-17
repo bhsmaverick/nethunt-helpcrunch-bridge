@@ -62,6 +62,7 @@ def init_db():
         "sync_priority": "email,phone,telegram",
         "telegram_field_hc": "telegram",  # customData key
         "telegram_field_nh": "Telegram",   # NetHunt CRM field name
+        "instagram_field_nh": "Instagram", # NetHunt CRM field name
         "phone_field_nh": "Phone",        # NetHunt CRM field name
         "email_field_nh": "Email",        # NetHunt CRM field name
         "update_nh_chat_link": "false",   # Boolean string

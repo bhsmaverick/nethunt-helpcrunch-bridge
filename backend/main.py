@@ -2,6 +2,8 @@ import logging
 import json
 import os
 import sqlite3
+import re
+from urllib.parse import urlparse, parse_qs
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Header, Depends, Response, Cookie
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -75,6 +77,7 @@ class SettingsUpdate(BaseModel):
     sync_priority: Optional[str] = "email,phone,telegram"
     telegram_field_hc: Optional[str] = "telegram"
     telegram_field_nh: Optional[str] = "Telegram"
+    instagram_field_nh: Optional[str] = "Instagram"
     phone_field_nh: Optional[str] = "Phone"
     email_field_nh: Optional[str] = "Email"
     update_nh_chat_link: Optional[str] = "false"
@@ -342,9 +345,115 @@ async def api_nethunt_folders(payload: TestConnectionRequest, username: str = De
     folders = await nethunt.list_folders(payload.email, payload.key, payload.base_url)
     return folders
 
+# --- Extraction & Normalization Helpers ---
+
+def extract_email(text: str) -> Optional[str]:
+    if not text:
+        return None
+    email_pattern = re.compile(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+')
+    match = email_pattern.search(text)
+    return match.group(0) if match else None
+
+def extract_phone(text: str) -> Optional[str]:
+    if not text:
+        return None
+    phone_pattern = re.compile(r'\+?\d[\d\-\(\)\s]{7,14}\d')
+    matches = phone_pattern.findall(text)
+    for match in matches:
+        cleaned = re.sub(r'[^\d+]', '', match)
+        digit_count = sum(c.isdigit() for c in cleaned)
+        if 9 <= digit_count <= 15:
+            if cleaned.startswith("+"):
+                return cleaned
+            if cleaned.startswith("380") and len(cleaned) == 12:
+                return "+" + cleaned
+            if cleaned.startswith("0") and len(cleaned) == 10:
+                return "+38" + cleaned
+            if len(cleaned) == 9 and cleaned.startswith(("50", "63", "66", "67", "68", "73", "89", "91", "92", "93", "94", "95", "96", "97", "98", "99")):
+                return "+380" + cleaned
+            if len(cleaned) >= 10:
+                return "+" + cleaned
+            return cleaned
+    return None
+
+def extract_messengers(text: str) -> dict:
+    results = {}
+    if not text:
+        return results
+    
+    text_lower = text.lower()
+    
+    # 1. Telegram
+    tg_link_match = re.search(r'(?:t\.me|telegram\.me)/([a-zA-Z0-9_]{5,32})', text)
+    if tg_link_match:
+        results["telegram"] = tg_link_match.group(1)
+    else:
+        tg_prefix_match = re.search(r'(?:tg|telegram|телеграм|тг)(?:\s*[:=-]\s*@?|\s+@)([a-zA-Z0-9_]{5,32})', text_lower)
+        if tg_prefix_match:
+            start, end = tg_prefix_match.span(1)
+            results["telegram"] = text[start:end]
+        else:
+            at_matches = re.finditer(r'@([a-zA-Z0-9_]{5,32})', text)
+            for m in at_matches:
+                start_idx = m.start()
+                if start_idx == 0 or not text[start_idx-1].isalnum():
+                    domain_text = text[m.end():m.end()+10]
+                    if not re.match(r'^\.[a-zA-Z]{2,4}', domain_text):
+                        results["telegram"] = m.group(1)
+                        break
+                        
+    # 2. Instagram
+    ig_link_match = re.search(r'(?:instagram\.com|instagr\.am)/([a-zA-Z0-9_.]+)', text)
+    if ig_link_match:
+        handle = ig_link_match.group(1)
+        if handle.endswith("/"):
+            handle = handle[:-1]
+        results["instagram"] = handle
+    else:
+        ig_prefix_match = re.search(r'(?:instagram|insta|інстаграм|інста|ig)(?:\s*[:=-]\s*@?|\s+@)([a-zA-Z0-9_.]+)', text_lower)
+        if ig_prefix_match:
+            start, end = ig_prefix_match.span(1)
+            results["instagram"] = text[start:end]
+            
+    return results
+
+def extract_params_from_url(url_str: str) -> dict:
+    if not url_str:
+        return {}
+    try:
+        parsed = urlparse(url_str)
+        return {k: v[0] for k, v in parse_qs(parsed.query).items() if v}
+    except Exception:
+        return {}
+
+def detect_platform_from_url(url_str: str) -> str:
+    if not url_str:
+        return ""
+    url_lower = url_str.lower()
+    if "t.me" in url_lower or "telegram.org" in url_lower:
+        return "Telegram"
+    if "instagram.com" in url_lower or "instagr.am" in url_lower:
+        return "Instagram"
+    if "facebook.com" in url_lower or "fb.com" in url_lower:
+        return "Facebook"
+    if "youtube.com" in url_lower or "youtu.be" in url_lower:
+        return "YouTube"
+    if "viber.com" in url_lower:
+        return "Viber"
+    if "whatsapp.com" in url_lower or "wa.me" in url_lower:
+        return "WhatsApp"
+    if "google" in url_lower:
+        return "Google"
+    return ""
+
 # --- Webhook Synchronizer Business Logic ---
 
-async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optional[int] = None):
+async def process_sync_task(
+    event_type: str, 
+    customer_data: dict, 
+    chat_id: Optional[int] = None, 
+    message_text: Optional[str] = None
+):
     settings = get_settings()
     hc_api_key = settings.get("helpcrunch_api_key")
     nh_email = settings.get("nethunt_api_email")
@@ -355,13 +464,14 @@ async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optio
     priority_str = settings.get("sync_priority", "email,phone,telegram")
     telegram_hc_key = settings.get("telegram_field_hc", "telegram")
     telegram_nh_key = settings.get("telegram_field_nh", "Telegram")
+    instagram_nh_key = settings.get("instagram_field_nh", "Instagram")
     phone_nh_key = settings.get("phone_field_nh", "Phone")
     email_nh_key = settings.get("email_field_nh", "Email")
     update_nh_link = settings.get("update_nh_chat_link") == "true"
     nh_link_field = settings.get("nh_chat_link_field", "HelpCrunch Chat Link")
     hc_subdomain = settings.get("helpcrunch_subdomain", "")
 
-    # Load new UTM tracking key configurations
+    # Load UTM tracking key configurations
     utm_src_f = settings.get("utm_source_field_nh", "utm_source")
     utm_med_f = settings.get("utm_medium_field_nh", "utm_medium")
     utm_cam_f = settings.get("utm_campaign_field_nh", "utm_campaign")
@@ -382,6 +492,12 @@ async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optio
     location_data = customer_data.get("location", {}) or {}
     cust_country = location_data.get("countryCode") or ""
     cust_city = location_data.get("city") or ""
+
+    # Normalize customer's initial phone number
+    if cust_phone:
+        normalized_initial_phone = extract_phone(cust_phone)
+        if normalized_initial_phone:
+            cust_phone = normalized_initial_phone
 
     # Parse customData (for Telegram and UTM parameters)
     telegram_handle = ""
@@ -421,26 +537,101 @@ async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optio
             utm_term = custom_data.get("utm_term") or ""
             utm_content = custom_data.get("utm_content") or ""
             gclid = custom_data.get("gclid") or ""
-            
-    # Clean Telegram handle
+
+    # Parse query parameters from source and referer URLs
+    source_params = extract_params_from_url(cust_source)
+    referer_params = extract_params_from_url(cust_referer)
+
+    # Merge extracted UTMs (priority: custom_data -> source_params -> referer_params)
+    if not utm_source:
+        utm_source = source_params.get("utm_source") or referer_params.get("utm_source") or ""
+    if not utm_medium:
+        utm_medium = source_params.get("utm_medium") or referer_params.get("utm_medium") or ""
+    if not utm_campaign:
+        utm_campaign = source_params.get("utm_campaign") or referer_params.get("utm_campaign") or ""
+    if not utm_term:
+        utm_term = source_params.get("utm_term") or referer_params.get("utm_term") or ""
+    if not utm_content:
+        utm_content = source_params.get("utm_content") or referer_params.get("utm_content") or ""
+    if not gclid:
+        gclid = source_params.get("gclid") or referer_params.get("gclid") or ""
+
+    # Referrer/Source Platform & Handle Detection from URLs
+    detected_platform = detect_platform_from_url(cust_referer) or detect_platform_from_url(cust_source)
+    
+    # Try to extract messenger handles directly from referer or source URL path
+    instagram_handle = ""
+    
+    # Check if referer or source is Telegram link (t.me/handle)
+    for url_str in [cust_source, cust_referer]:
+        if url_str and "t.me/" in url_str.lower():
+            try:
+                parsed_url = urlparse(url_str)
+                path = parsed_url.path.strip("/")
+                if path and len(path) >= 5 and re.match(r'^[a-zA-Z0-9_]+$', path):
+                    if path.lower() not in ["share", "joinchat", "addstickers", "c", "s"]:
+                        telegram_handle = path
+                        detected_platform = "Telegram"
+                        break
+            except Exception:
+                pass
+                
+    # Check if referer or source is Instagram profile (instagram.com/handle)
+    for url_str in [cust_source, cust_referer]:
+        if url_str and "instagram.com/" in url_str.lower():
+            try:
+                parsed_url = urlparse(url_str)
+                path = parsed_url.path.strip("/")
+                if path and 1 <= len(path) <= 30 and re.match(r'^[a-zA-Z0-9_.]+$', path):
+                    if path.lower() not in ["p", "reel", "stories", "explore", "direct"]:
+                        instagram_handle = path
+                        detected_platform = "Instagram"
+                        break
+            except Exception:
+                pass
+
+    # Extract info from message text if available
+    extracted_email = None
+    extracted_phone = None
+    extracted_tg = None
+    extracted_ig = None
+
+    if message_text:
+        extracted_email = extract_email(message_text)
+        extracted_phone = extract_phone(message_text)
+        messengers = extract_messengers(message_text)
+        extracted_tg = messengers.get("telegram")
+        extracted_ig = messengers.get("instagram")
+
+    # Clean Telegram handle from prefix
     if telegram_handle and telegram_handle.startswith("@"):
         telegram_handle = telegram_handle[1:]
 
+    # Merge extracted details (message/URL extraction overrides profile/custom data if profile is empty)
+    merged_email = cust_email or extracted_email or ""
+    merged_phone = cust_phone or extracted_phone or ""
+    merged_telegram = telegram_handle or extracted_tg or ""
+    merged_instagram = instagram_handle or extracted_ig or ""
+
     details_log = []
     details_log.append(f"Starting processing for Event: {event_type}")
-    details_log.append(f"Customer info: ID={customer_id}, Name='{cust_name}', Email='{cust_email}', Phone='{cust_phone}', Telegram='{telegram_handle}'")
-    details_log.append(f"Tracking: Source='{cust_source}', Referer='{cust_referer}', Country='{cust_country}', City='{cust_city}'")
+    details_log.append(f"Customer info: ID={customer_id}, Name='{cust_name}', Email='{cust_email}', Phone='{cust_phone}', Telegram='{telegram_handle}', Instagram='{instagram_handle}'")
+    if message_text:
+        details_log.append(f"Parsed Message Text: '{message_text}'")
+        details_log.append(f"Extracted from message: Email='{extracted_email or ''}', Phone='{extracted_phone or ''}', Telegram='{extracted_tg or ''}', Instagram='{extracted_ig or ''}'")
+    details_log.append(f"Merged fields: Email='{merged_email}', Phone='{merged_phone}', Telegram='{merged_telegram}', Instagram='{merged_instagram}'")
+    details_log.append(f"Tracking: Source='{cust_source}', Referer='{cust_referer}', Country='{cust_country}', City='{cust_city}', Platform='{detected_platform}'")
     if utm_source or utm_medium or utm_campaign or gclid:
         details_log.append(f"UTMs: src='{utm_source}', med='{utm_medium}', cam='{utm_campaign}', gclid='{gclid}'")
 
     if not hc_api_key or not nh_email or not nh_key or not contacts_folder:
         err_msg = "Aborted: Credentials or folder mapping missing in Settings."
         details_log.append(err_msg)
-        add_log(event_type, cust_name, cust_email, cust_phone, "error", "\n".join(details_log))
+        add_log(event_type, cust_name, merged_email, merged_phone, "error", "\n".join(details_log))
         logger.error(err_msg)
         return
 
-    # Build UTM tracking fields payload to update/write in NetHunt CRM
+    # Build UTM and tracking fields payload to update/write in NetHunt CRM
     tracking_fields = {}
     if utm_src_f and utm_source: tracking_fields[utm_src_f] = utm_source
     if utm_med_f and utm_medium: tracking_fields[utm_med_f] = utm_medium
@@ -449,7 +640,9 @@ async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optio
     if utm_cnt_f and utm_content: tracking_fields[utm_cnt_f] = utm_content
     if gclid_f and gclid: tracking_fields[gclid_f] = gclid
     if referer_f and cust_referer: tracking_fields[referer_f] = cust_referer
-    if source_f and cust_source: tracking_fields[source_f] = cust_source
+    if source_f:
+        # Save detected platform if available, otherwise fallback to URL
+        tracking_fields[source_f] = detected_platform if detected_platform else (cust_source or "Organic/Direct")
     if country_f and cust_country: tracking_fields[country_f] = cust_country
     if city_f and cust_city: tracking_fields[city_f] = cust_city
 
@@ -458,22 +651,23 @@ async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optio
     search_method_used = ""
     priorities = [p.strip() for p in priority_str.split(",") if p.strip()]
 
+    # Sequence using the MERGED fields (so if we extracted email/phone/telegram from message, we search with it!)
     for step in priorities:
-        if step == "email" and cust_email:
-            details_log.append(f"Searching NetHunt by Email: '{cust_email}'...")
-            contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, cust_email)
+        if step == "email" and merged_email:
+            details_log.append(f"Searching NetHunt by Email: '{merged_email}'...")
+            contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, merged_email)
             if contact:
                 search_method_used = "Email"
                 break
-        elif step == "phone" and cust_phone:
-            details_log.append(f"Searching NetHunt by Phone: '{cust_phone}'...")
-            contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, cust_phone)
+        elif step == "phone" and merged_phone:
+            details_log.append(f"Searching NetHunt by Phone: '{merged_phone}'...")
+            contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, merged_phone)
             if contact:
                 search_method_used = "Phone"
                 break
-        elif step == "telegram" and telegram_handle:
-            details_log.append(f"Searching NetHunt by Telegram: '{telegram_handle}'...")
-            contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, telegram_handle)
+        elif step == "telegram" and merged_telegram:
+            details_log.append(f"Searching NetHunt by Telegram: '{merged_telegram}'...")
+            contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, merged_telegram)
             if contact:
                 search_method_used = "Telegram"
                 break
@@ -486,12 +680,14 @@ async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optio
         new_fields = {
             "Name": cust_name
         }
-        if cust_email and email_nh_key:
-            new_fields[email_nh_key] = cust_email
-        if cust_phone and phone_nh_key:
-            new_fields[phone_nh_key] = cust_phone
-        if telegram_handle and telegram_nh_key:
-            new_fields[telegram_nh_key] = telegram_handle
+        if merged_email and email_nh_key:
+            new_fields[email_nh_key] = merged_email
+        if merged_phone and phone_nh_key:
+            new_fields[phone_nh_key] = merged_phone
+        if merged_telegram and telegram_nh_key:
+            new_fields[telegram_nh_key] = merged_telegram
+        if merged_instagram and instagram_nh_key:
+            new_fields[instagram_nh_key] = merged_instagram
             
         # Append UTM tracking fields to create-record payload
         new_fields.update(tracking_fields)
@@ -511,18 +707,40 @@ async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optio
                 details_log.append(f"Wrote UTM & Referrer variables: {list(tracking_fields.keys())}")
         else:
             details_log.append("Failed to create new NetHunt contact card. Aborting.")
-            add_log(event_type, cust_name, cust_email, cust_phone, "error", "\n".join(details_log))
+            add_log(event_type, cust_name, merged_email, merged_phone, "error", "\n".join(details_log))
             return
     else:
-        # Existing contact was matched -> Update their UTM parameters
+        # Existing contact was matched -> Update their UTM parameters AND any missing fields
         contact_id = contact.get("id")
-        if tracking_fields:
-            details_log.append(f"Existing client matched. Updating NetHunt CRM tracking fields: {list(tracking_fields.keys())}...")
-            updated_utm = await nethunt.update_contact(nh_email, nh_key, nh_base, contact_id, tracking_fields)
-            if updated_utm:
-                details_log.append("NetHunt contact tracking fields updated successfully.")
+        contact_fields = contact.get("fields", {})
+        
+        # Check for missing contact details in NetHunt to update them
+        update_fields = {}
+        if merged_email and email_nh_key and not contact_fields.get(email_nh_key):
+            update_fields[email_nh_key] = merged_email
+            details_log.append(f"Adding missing Email to NetHunt contact: '{merged_email}'")
+        if merged_phone and phone_nh_key and not contact_fields.get(phone_nh_key):
+            update_fields[phone_nh_key] = merged_phone
+            details_log.append(f"Adding missing Phone to NetHunt contact: '{merged_phone}'")
+        if merged_telegram and telegram_nh_key and not contact_fields.get(telegram_nh_key):
+            update_fields[telegram_nh_key] = merged_telegram
+            details_log.append(f"Adding missing Telegram handle to NetHunt contact: '{merged_telegram}'")
+        if merged_instagram and instagram_nh_key and not contact_fields.get(instagram_nh_key):
+            update_fields[instagram_nh_key] = merged_instagram
+            details_log.append(f"Adding missing Instagram handle to NetHunt contact: '{merged_instagram}'")
+            
+        # Append tracking fields
+        for k, v in tracking_fields.items():
+            if not contact_fields.get(k):
+                update_fields[k] = v
+                
+        if update_fields:
+            details_log.append(f"Updating NetHunt CRM contact fields: {list(update_fields.keys())}...")
+            updated = await nethunt.update_contact(nh_email, nh_key, nh_base, contact_id, update_fields)
+            if updated:
+                details_log.append("NetHunt contact updated successfully.")
             else:
-                details_log.append("Warning: Could not update NetHunt contact tracking fields.")
+                details_log.append("Warning: Could not update NetHunt contact fields.")
 
     contact_id = contact.get("id")
     contact_name = contact.get("name") or cust_name
@@ -531,6 +749,26 @@ async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optio
     # Build Contact Card Link
     contact_url = f"{nh_base}/app/records/{contacts_folder}/{contact_id}"
     details_log.append(f"NetHunt Contact Card URL: {contact_url}")
+
+    # Bilateral Update: Update HelpCrunch customer profile with newly extracted/merged details if they were missing
+    hc_update_payload = {}
+    if merged_email and not cust_email:
+        hc_update_payload["email"] = merged_email
+    if merged_phone and not cust_phone:
+        hc_update_payload["phone"] = merged_phone
+    if merged_telegram and not telegram_handle:
+        # HelpCrunch requires customData updates as a list of property/value dicts
+        hc_update_payload["customData"] = [
+            {"property": telegram_hc_key, "value": merged_telegram}
+        ]
+        
+    if hc_update_payload:
+        details_log.append(f"Bilateral sync: updating HelpCrunch customer profile {customer_id} with {list(hc_update_payload.keys())}...")
+        hc_updated = await helpcrunch.update_customer(hc_api_key, customer_id, hc_update_payload)
+        if hc_updated:
+            details_log.append("HelpCrunch customer profile updated successfully.")
+        else:
+            details_log.append("Warning: HelpCrunch customer profile update failed.")
 
     # Fetch Deals
     deals = []
@@ -613,7 +851,7 @@ async def process_sync_task(event_type: str, customer_data: dict, chat_id: Optio
         else:
             details_log.append(f"Warning: Failed to update contact card field '{nh_link_field}' (ensure field exists in NetHunt Contacts folder).")
 
-    add_log(event_type, cust_name, cust_email, cust_phone, "success", "\n".join(details_log))
+    add_log(event_type, cust_name, merged_email, merged_phone, "success", "\n".join(details_log))
     logger.info(f"Sync task completed successfully for customer {cust_name}")
 
 # Webhook Handler Endpoint (NOT protected - verified via HMAC)
@@ -649,6 +887,7 @@ async def webhook_handler(
     customer_data = {}
     chat_id = None
     
+    message_text = None
     if event == "chat.new":
         customer_data = event_data.get("customer") or {}
         chat_id = event_data.get("id")
@@ -657,6 +896,7 @@ async def webhook_handler(
     elif event == "message.chat.customer":
         customer_data = event_data.get("customer") or {}
         chat_id = event_data.get("chat", {}).get("id") if isinstance(event_data.get("chat"), dict) else event_data.get("chat")
+        message_text = event_data.get("message", {}).get("text")
     else:
         return {"status": "ignored", "reason": f"Unhandled event type: {event}"}
         
@@ -664,7 +904,7 @@ async def webhook_handler(
         return {"status": "ignored", "reason": "No customer ID found in payload."}
         
     # Queue processing to keep HTTP response sub-second
-    background_tasks.add_task(process_sync_task, event, customer_data, chat_id)
+    background_tasks.add_task(process_sync_task, event, customer_data, chat_id, message_text)
     
     return {"status": "queued", "event": event}
 

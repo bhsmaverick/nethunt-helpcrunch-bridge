@@ -181,10 +181,13 @@ async def create_contact(email: str, api_key: str, base_url: str, folder_id: str
         
     url = f"{_clean_base_url(base_url)}/api/v1/zapier/actions/create-record/{folder_id}"
     headers = _get_auth_headers(email, api_key)
+    payload = {
+        "fields": fields
+    }
     
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, headers=headers, json=fields, timeout=10.0)
+            response = await client.post(url, headers=headers, json=payload, timeout=10.0)
             if response.status_code in (200, 201):
                 return response.json()
             logger.error(f"Failed to create NetHunt contact: Status {response.status_code}, Body {response.text}")

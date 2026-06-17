@@ -108,3 +108,21 @@ def verify_signature(raw_body: bytes, signature: str, secret: str) -> bool:
     except Exception as e:
         logger.exception("Error verifying signature:")
         return False
+
+async def update_customer(api_key: str, customer_id: int, payload: dict) -> bool:
+    """
+    Updates general customer details in HelpCrunch (e.g. email, phone, customData).
+    """
+    url = f"https://api.helpcrunch.com/v1/customers/{customer_id}"
+    headers = _get_headers(api_key)
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.put(url, headers=headers, json=payload, timeout=10.0)
+            if response.status_code in (200, 201):
+                return True
+            logger.warning(f"Failed to update HelpCrunch customer {customer_id}: Status {response.status_code}, Body {response.text}")
+            return False
+    except Exception as e:
+        logger.exception(f"HelpCrunch update customer error for {customer_id}:")
+        return False

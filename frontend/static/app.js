@@ -43,6 +43,7 @@ const nhFolderDealsSelect = document.getElementById('nh-folder-deals');
 const syncPriorityInput = document.getElementById('sync-priority');
 const fieldTgHcInput = document.getElementById('field-tg-hc');
 const fieldTgNhInput = document.getElementById('field-tg-nh');
+const fieldInstaNhInput = document.getElementById('field-insta-nh');
 const checkboxUpdateNhChatLink = document.getElementById('update-nh-chat-link');
 const groupNhLinkField = document.getElementById('nh-link-field-group');
 const fieldLinkNhInput = document.getElementById('field-link-nh');
@@ -383,6 +384,7 @@ async function loadSettings() {
         syncPriorityInput.value = settings.sync_priority || 'email,phone,telegram';
         fieldTgHcInput.value = settings.telegram_field_hc || 'telegram';
         fieldTgNhInput.value = settings.telegram_field_nh || 'Telegram';
+        fieldInstaNhInput.value = settings.instagram_field_nh || 'Instagram';
         fieldLinkNhInput.value = settings.nh_chat_link_field || 'HelpCrunch Chat Link';
         
         // Populate UTM tracking inputs
@@ -614,6 +616,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
         sync_priority: syncPriorityInput.value.trim(),
         telegram_field_hc: fieldTgHcInput.value.trim(),
         telegram_field_nh: fieldTgNhInput.value.trim(),
+        instagram_field_nh: fieldInstaNhInput.value.trim(),
         phone_field_nh: 'Phone',
         email_field_nh: 'Email',
         update_nh_chat_link: checkboxUpdateNhChatLink.checked ? 'true' : 'false',
