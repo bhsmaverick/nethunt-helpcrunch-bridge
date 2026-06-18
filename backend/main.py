@@ -699,9 +699,9 @@ async def process_sync_task(
             "Name": cust_name
         }
         if merged_email and email_nh_key:
-            new_fields[email_nh_key] = merged_email
+            new_fields[email_nh_key] = [merged_email]
         if merged_phone and phone_nh_key:
-            new_fields[phone_nh_key] = merged_phone
+            new_fields[phone_nh_key] = [merged_phone]
         if merged_telegram and telegram_nh_key:
             new_fields[telegram_nh_key] = merged_telegram
         if merged_instagram and instagram_nh_key:
@@ -735,10 +735,10 @@ async def process_sync_task(
         # Check for missing contact details in NetHunt to update them
         update_fields = {}
         if merged_email and email_nh_key and not contact_fields.get(email_nh_key):
-            update_fields[email_nh_key] = merged_email
+            update_fields[email_nh_key] = [merged_email]
             details_log.append(f"Adding missing Email to NetHunt contact: '{merged_email}'")
         if merged_phone and phone_nh_key and not contact_fields.get(phone_nh_key):
-            update_fields[phone_nh_key] = merged_phone
+            update_fields[phone_nh_key] = [merged_phone]
             details_log.append(f"Adding missing Phone to NetHunt contact: '{merged_phone}'")
         if merged_telegram and telegram_nh_key and not contact_fields.get(telegram_nh_key):
             update_fields[telegram_nh_key] = merged_telegram
