@@ -196,3 +196,23 @@ async def create_contact(email: str, api_key: str, base_url: str, folder_id: str
         logger.exception("NetHunt create contact error:")
         return None
 
+async def list_folder_fields(email: str, api_key: str, base_url: str, folder_id: str) -> list:
+    """
+    Retrieves the list of fields (id and name) for a specific folder in NetHunt CRM.
+    """
+    if not folder_id:
+        return []
+    url = f"{_clean_base_url(base_url)}/api/v1/zapier/triggers/folder-field/{folder_id}"
+    headers = _get_auth_headers(email, api_key)
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, timeout=10.0)
+            if response.status_code == 200:
+                return response.json()
+            logger.error(f"Failed to list NetHunt folder fields: {response.text}")
+            return []
+    except Exception as e:
+        logger.exception(f"NetHunt list folder fields error for {folder_id}:")
+        return []
+

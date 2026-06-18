@@ -98,6 +98,12 @@ class TestConnectionRequest(BaseModel):
     key: str
     base_url: Optional[str] = "https://nethunt.co"
 
+class FolderFieldsRequest(BaseModel):
+    email: str
+    key: str
+    base_url: Optional[str] = "https://nethunt.co"
+    folder_id: str
+
 class SimulateWebhookRequest(BaseModel):
     event: str
     name: str
@@ -344,6 +350,11 @@ async def api_test_helpcrunch(payload: TestConnectionRequest, username: str = De
 async def api_nethunt_folders(payload: TestConnectionRequest, username: str = Depends(get_current_user)):
     folders = await nethunt.list_folders(payload.email, payload.key, payload.base_url)
     return folders
+
+@app.post("/api/nethunt/folder-fields")
+async def api_nethunt_folder_fields(payload: FolderFieldsRequest, username: str = Depends(get_current_user)):
+    fields = await nethunt.list_folder_fields(payload.email, payload.key, payload.base_url, payload.folder_id)
+    return fields
 
 # --- Extraction & Normalization Helpers ---
 

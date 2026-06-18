@@ -515,7 +515,99 @@ function populateFolderOptions() {
         if (folder.id === selectedDeals) opt2.selected = true;
         nhFolderDealsSelect.appendChild(opt2);
     });
+
+    if (selectedContact) {
+        loadFolderFields(selectedContact);
+    }
 }
+
+// NetHunt field mapping dropdowns list
+const nhFieldSelects = [
+    { select: fieldTgNhInput, settingKey: 'telegram_field_nh', label: 'Telegram' },
+    { select: fieldInstaNhInput, settingKey: 'instagram_field_nh', label: 'Instagram' },
+    { select: fieldLinkNhInput, settingKey: 'nh_chat_link_field', label: 'Чат лінк' },
+    { select: utmSourceNhInput, settingKey: 'utm_source_field_nh', label: 'UTM Source' },
+    { select: utmMediumNhInput, settingKey: 'utm_medium_field_nh', label: 'UTM Medium' },
+    { select: utmCampaignNhInput, settingKey: 'utm_campaign_field_nh', label: 'UTM Campaign' },
+    { select: utmTermNhInput, settingKey: 'utm_term_field_nh', label: 'UTM Term' },
+    { select: utmContentNhInput, settingKey: 'utm_content_field_nh', label: 'UTM Content' },
+    { select: gclidNhInput, settingKey: 'gclid_field_nh', label: 'Gclid' },
+    { select: refererNhInput, settingKey: 'referer_field_nh', label: 'Referer' },
+    { select: sourceNhInput, settingKey: 'source_field_nh', label: 'Source' },
+    { select: countryNhInput, settingKey: 'country_field_nh', label: 'Country' },
+    { select: cityNhInput, settingKey: 'city_field_nh', label: 'City' }
+];
+
+async function loadFolderFields(folderId) {
+    if (!folderId) {
+        nhFieldSelects.forEach(item => {
+            item.select.innerHTML = '<option value="">Спочатку виберіть папку контактів...</option>';
+        });
+        return;
+    }
+
+    // Show loading state
+    nhFieldSelects.forEach(item => {
+        item.select.innerHTML = '<option value="">Завантаження полів...</option>';
+    });
+
+    try {
+        const email = nhApiEmailInput.value.trim();
+        const key = nhApiKeyInput.value.trim();
+        const base_url = nhBaseUrlInput.value.trim();
+
+        const res = await secureFetch('/api/nethunt/folder-fields', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, key, base_url, folder_id: folderId })
+        });
+
+        if (res.ok) {
+            const fields = await res.json();
+            nhFieldSelects.forEach(item => {
+                item.select.innerHTML = `<option value="">-- Виберіть поле для ${item.label} --</option>`;
+                
+                // Sort fields alphabetically by name
+                const sortedFields = [...fields].sort((a, b) => a.name.localeCompare(b.name));
+                
+                sortedFields.forEach(f => {
+                    const opt = document.createElement('option');
+                    opt.value = f.name;
+                    opt.textContent = f.name;
+                    if (currentSettings[item.settingKey] === f.name) {
+                        opt.selected = true;
+                    }
+                    item.select.appendChild(opt);
+                });
+
+                // Fallback: If saved value is not found in CRM and is not empty, add it to options and select it
+                const savedVal = currentSettings[item.settingKey];
+                if (savedVal && !fields.some(f => f.name === savedVal)) {
+                    const opt = document.createElement('option');
+                    opt.value = savedVal;
+                    opt.textContent = `${savedVal} (Не знайдено в CRM)`;
+                    opt.selected = true;
+                    item.select.appendChild(opt);
+                }
+            });
+        } else {
+            showToast('Не вдалося завантажити поля папки NetHunt', 'error');
+            nhFieldSelects.forEach(item => {
+                item.select.innerHTML = '<option value="">Помилка завантаження полів</option>';
+            });
+        }
+    } catch (err) {
+        console.error("Error loading folder fields:", err);
+        nhFieldSelects.forEach(item => {
+            item.select.innerHTML = '<option value="">Помилка завантаження</option>';
+        });
+    }
+}
+
+// Listener for Contacts folder change
+nhFolderContactsSelect.addEventListener('change', (e) => {
+    loadFolderFields(e.target.value);
+});
 
 // Test HelpCrunch Button Handler
 document.getElementById('btn-test-hc').addEventListener('click', async () => {
