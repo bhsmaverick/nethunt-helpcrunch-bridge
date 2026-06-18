@@ -65,6 +65,7 @@ def init_db():
         "instagram_field_nh": "Instagram", # NetHunt CRM field name
         "phone_field_nh": "Phone",        # NetHunt CRM field name
         "email_field_nh": "Email",        # NetHunt CRM field name
+        "hc_id_field_nh": "HelpCrunch ID", # NetHunt CRM field name for HC Customer ID
         "update_nh_chat_link": "false",   # Boolean string
         "nh_chat_link_field": "HelpCrunch Chat Link", # NetHunt CRM field name
         "utm_source_field_nh": "utm_source",

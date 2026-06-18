@@ -56,12 +56,12 @@ async def list_folders(email: str, api_key: str, base_url: str) -> list:
 async def find_contact(email: str, api_key: str, base_url: str, folder_id: str, query: str) -> dict:
     """
     Searches for a contact by a query string.
+    The query can be a raw search term or NetHunt search query (e.g. `Email:"value"`).
     Returns the first matching record or None if no match is found.
     """
     if not folder_id or not query:
         return None
         
-    # Standard search path
     url = f"{_clean_base_url(base_url)}/api/v1/searches/find-record/{folder_id}"
     params = {"query": query, "limit": 1}
     headers = _get_auth_headers(email, api_key)
@@ -76,8 +76,10 @@ async def find_contact(email: str, api_key: str, base_url: str, folder_id: str, 
                 elif isinstance(data, dict) and "id" in data:
                     return data
                 elif isinstance(data, dict) and "data" in data and len(data["data"]) > 0:
-                    # Some endpoints envelope responses in 'data'
                     return data["data"][0]
+            elif response.status_code == 404:
+                # 404 is returned by NetHunt if no record matches the query
+                return None
             logger.warning(f"NetHunt contact search status {response.status_code} for query '{query}': {response.text}")
             return None
     except Exception as e:

@@ -46,6 +46,7 @@ const fieldEmailNhInput = document.getElementById('field-email-nh');
 const fieldPhoneNhInput = document.getElementById('field-phone-nh');
 const fieldTgNhInput = document.getElementById('field-tg-nh');
 const fieldInstaNhInput = document.getElementById('field-insta-nh');
+const fieldHcIdNhInput = document.getElementById('field-hc-id-nh');
 const checkboxUpdateNhChatLink = document.getElementById('update-nh-chat-link');
 const groupNhLinkField = document.getElementById('nh-link-field-group');
 const fieldLinkNhInput = document.getElementById('field-link-nh');
@@ -389,6 +390,7 @@ async function loadSettings() {
         fieldPhoneNhInput.value = settings.phone_field_nh || 'Phone';
         fieldTgNhInput.value = settings.telegram_field_nh || 'Telegram';
         fieldInstaNhInput.value = settings.instagram_field_nh || 'Instagram';
+        fieldHcIdNhInput.value = settings.hc_id_field_nh || 'HelpCrunch ID';
         fieldLinkNhInput.value = settings.nh_chat_link_field || 'HelpCrunch Chat Link';
         
         // Populate UTM tracking inputs
@@ -531,6 +533,7 @@ const nhFieldSelects = [
     { select: fieldPhoneNhInput, settingKey: 'phone_field_nh', label: 'Phone' },
     { select: fieldTgNhInput, settingKey: 'telegram_field_nh', label: 'Telegram' },
     { select: fieldInstaNhInput, settingKey: 'instagram_field_nh', label: 'Instagram' },
+    { select: fieldHcIdNhInput, settingKey: 'hc_id_field_nh', label: 'HelpCrunch ID' },
     { select: fieldLinkNhInput, settingKey: 'nh_chat_link_field', label: 'Чат лінк' },
     { select: utmSourceNhInput, settingKey: 'utm_source_field_nh', label: 'UTM Source' },
     { select: utmMediumNhInput, settingKey: 'utm_medium_field_nh', label: 'UTM Medium' },
@@ -715,6 +718,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
         telegram_field_hc: fieldTgHcInput.value.trim(),
         telegram_field_nh: fieldTgNhInput.value.trim(),
         instagram_field_nh: fieldInstaNhInput.value.trim(),
+        hc_id_field_nh: fieldHcIdNhInput.value,
         phone_field_nh: fieldPhoneNhInput.value,
         email_field_nh: fieldEmailNhInput.value,
         update_nh_chat_link: checkboxUpdateNhChatLink.checked ? 'true' : 'false',

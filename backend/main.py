@@ -87,6 +87,7 @@ class SettingsUpdate(BaseModel):
     instagram_field_nh: Optional[str] = "Instagram"
     phone_field_nh: Optional[str] = "Phone"
     email_field_nh: Optional[str] = "Email"
+    hc_id_field_nh: Optional[str] = "HelpCrunch ID"
     update_nh_chat_link: Optional[str] = "false"
     nh_chat_link_field: Optional[str] = "HelpCrunch Chat Link"
     utm_source_field_nh: Optional[str] = "utm_source"
@@ -485,6 +486,7 @@ async def process_sync_task(
     instagram_nh_key = settings.get("instagram_field_nh", "Instagram")
     phone_nh_key = settings.get("phone_field_nh", "Phone")
     email_nh_key = settings.get("email_field_nh", "Email")
+    hc_id_nh_key = settings.get("hc_id_field_nh", "HelpCrunch ID")
     update_nh_link = settings.get("update_nh_chat_link") == "true"
     nh_link_field = settings.get("nh_chat_link_field", "HelpCrunch Chat Link")
     hc_subdomain = settings.get("helpcrunch_subdomain", "")
@@ -667,28 +669,41 @@ async def process_sync_task(
     # Sequentially look up contact in NetHunt
     contact = None
     search_method_used = ""
-    priorities = [p.strip() for p in priority_str.split(",") if p.strip()]
+    
+    # STEP 0: First try searching by HelpCrunch ID (which is the most reliable way to prevent duplicates)
+    if hc_id_nh_key and customer_id:
+        details_log.append(f"Searching NetHunt by HelpCrunch ID: '{customer_id}' (Field: '{hc_id_nh_key}')...")
+        # Exact field query syntax: Field_Name:"value"
+        query_str = f'`{hc_id_nh_key}`:"{customer_id}"'
+        contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, query_str)
+        if contact:
+            search_method_used = "HelpCrunch ID"
 
-    # Sequence using the MERGED fields (so if we extracted email/phone/telegram from message, we search with it!)
-    for step in priorities:
-        if step == "email" and merged_email:
-            details_log.append(f"Searching NetHunt by Email: '{merged_email}'...")
-            contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, merged_email)
-            if contact:
-                search_method_used = "Email"
-                break
-        elif step == "phone" and merged_phone:
-            details_log.append(f"Searching NetHunt by Phone: '{merged_phone}'...")
-            contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, merged_phone)
-            if contact:
-                search_method_used = "Phone"
-                break
-        elif step == "telegram" and merged_telegram:
-            details_log.append(f"Searching NetHunt by Telegram: '{merged_telegram}'...")
-            contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, merged_telegram)
-            if contact:
-                search_method_used = "Telegram"
-                break
+    # Fallback to other priorities if not matched by ID
+    if not contact:
+        priorities = [p.strip() for p in priority_str.split(",") if p.strip()]
+        for step in priorities:
+            if step == "email" and merged_email and email_nh_key:
+                details_log.append(f"Searching NetHunt by Email: '{merged_email}' (Field: '{email_nh_key}')...")
+                query_str = f'`{email_nh_key}`:"{merged_email}"'
+                contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, query_str)
+                if contact:
+                    search_method_used = "Email"
+                    break
+            elif step == "phone" and merged_phone and phone_nh_key:
+                details_log.append(f"Searching NetHunt by Phone: '{merged_phone}' (Field: '{phone_nh_key}')...")
+                query_str = f'`{phone_nh_key}`:"{merged_phone}"'
+                contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, query_str)
+                if contact:
+                    search_method_used = "Phone"
+                    break
+            elif step == "telegram" and merged_telegram and telegram_nh_key:
+                details_log.append(f"Searching NetHunt by Telegram: '{merged_telegram}' (Field: '{telegram_nh_key}')...")
+                query_str = f'`{telegram_nh_key}`:"{merged_telegram}"'
+                contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, query_str)
+                if contact:
+                    search_method_used = "Telegram"
+                    break
 
     is_new_contact = False
     if not contact:
@@ -698,6 +713,8 @@ async def process_sync_task(
         new_fields = {
             "Name": cust_name
         }
+        if customer_id and hc_id_nh_key:
+            new_fields[hc_id_nh_key] = str(customer_id)
         if merged_email and email_nh_key:
             new_fields[email_nh_key] = [merged_email]
         if merged_phone and phone_nh_key:
@@ -734,6 +751,9 @@ async def process_sync_task(
         
         # Check for missing contact details in NetHunt to update them
         update_fields = {}
+        if customer_id and hc_id_nh_key and not contact_fields.get(hc_id_nh_key):
+            update_fields[hc_id_nh_key] = str(customer_id)
+            details_log.append(f"Linking HelpCrunch ID to NetHunt contact: '{customer_id}'")
         if merged_email and email_nh_key and not contact_fields.get(email_nh_key):
             update_fields[email_nh_key] = [merged_email]
             details_log.append(f"Adding missing Email to NetHunt contact: '{merged_email}'")
