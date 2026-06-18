@@ -3,7 +3,7 @@ services:
     build: .
     container_name: nethunt-helpcrunch-bridge
     ports:
-      - "8091:8000"
+      - "8092:8000"
     restart: unless-stopped
     volumes:
       - ./data/bridge.db:/app/backend/bridge.db
