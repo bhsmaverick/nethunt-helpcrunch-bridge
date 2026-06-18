@@ -182,7 +182,8 @@ async def create_contact(email: str, api_key: str, base_url: str, folder_id: str
     url = f"{_clean_base_url(base_url)}/api/v1/zapier/actions/create-record/{folder_id}"
     headers = _get_auth_headers(email, api_key)
     payload = {
-        "fields": fields
+        "fields": fields,
+        "timeZone": "Europe/Kiev"
     }
     
     try:
