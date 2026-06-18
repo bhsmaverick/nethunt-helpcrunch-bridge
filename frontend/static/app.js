@@ -42,6 +42,8 @@ const nhFolderContactsSelect = document.getElementById('nh-folder-contacts');
 const nhFolderDealsSelect = document.getElementById('nh-folder-deals');
 const syncPriorityInput = document.getElementById('sync-priority');
 const fieldTgHcInput = document.getElementById('field-tg-hc');
+const fieldEmailNhInput = document.getElementById('field-email-nh');
+const fieldPhoneNhInput = document.getElementById('field-phone-nh');
 const fieldTgNhInput = document.getElementById('field-tg-nh');
 const fieldInstaNhInput = document.getElementById('field-insta-nh');
 const checkboxUpdateNhChatLink = document.getElementById('update-nh-chat-link');
@@ -383,6 +385,8 @@ async function loadSettings() {
         nhBaseUrlInput.value = settings.nethunt_base_url || 'https://nethunt.co';
         syncPriorityInput.value = settings.sync_priority || 'email,phone,telegram';
         fieldTgHcInput.value = settings.telegram_field_hc || 'telegram';
+        fieldEmailNhInput.value = settings.email_field_nh || 'Email';
+        fieldPhoneNhInput.value = settings.phone_field_nh || 'Phone';
         fieldTgNhInput.value = settings.telegram_field_nh || 'Telegram';
         fieldInstaNhInput.value = settings.instagram_field_nh || 'Instagram';
         fieldLinkNhInput.value = settings.nh_chat_link_field || 'HelpCrunch Chat Link';
@@ -523,6 +527,8 @@ function populateFolderOptions() {
 
 // NetHunt field mapping dropdowns list
 const nhFieldSelects = [
+    { select: fieldEmailNhInput, settingKey: 'email_field_nh', label: 'Email' },
+    { select: fieldPhoneNhInput, settingKey: 'phone_field_nh', label: 'Phone' },
     { select: fieldTgNhInput, settingKey: 'telegram_field_nh', label: 'Telegram' },
     { select: fieldInstaNhInput, settingKey: 'instagram_field_nh', label: 'Instagram' },
     { select: fieldLinkNhInput, settingKey: 'nh_chat_link_field', label: 'Чат лінк' },
@@ -709,8 +715,8 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
         telegram_field_hc: fieldTgHcInput.value.trim(),
         telegram_field_nh: fieldTgNhInput.value.trim(),
         instagram_field_nh: fieldInstaNhInput.value.trim(),
-        phone_field_nh: 'Phone',
-        email_field_nh: 'Email',
+        phone_field_nh: fieldPhoneNhInput.value,
+        email_field_nh: fieldEmailNhInput.value,
         update_nh_chat_link: checkboxUpdateNhChatLink.checked ? 'true' : 'false',
         nh_chat_link_field: fieldLinkNhInput.value.trim(),
         
