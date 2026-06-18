@@ -50,6 +50,13 @@ async def get_index():
         return FileResponse(index_path)
     return "<h3>Error: index.html not found.</h3>"
 
+@app.get("/favicon.ico")
+async def get_favicon():
+    fav_path = os.path.join(static_dir, "favicon.png")
+    if os.path.exists(fav_path):
+        return FileResponse(fav_path)
+    raise HTTPException(status_code=404)
+
 # Mount static folder
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
