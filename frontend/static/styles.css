@@ -457,6 +457,12 @@ body {
     border: 1px solid rgba(245, 158, 11, 0.2);
 }
 
+.badge.warning {
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--warning);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
 .badge.error {
     background: rgba(239, 68, 68, 0.1);
     color: var(--danger);

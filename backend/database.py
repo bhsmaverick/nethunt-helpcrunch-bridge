@@ -54,9 +54,17 @@ def init_db():
         customer_email TEXT,
         customer_phone TEXT,
         status TEXT,
+        level TEXT,
         details TEXT
     )
     """)
+    # Migrate existing logs tables that were created without the level column
+    cursor.execute("PRAGMA table_info(logs)")
+    existing_columns = [row[1] for row in cursor.fetchall()]
+    if "level" not in existing_columns:
+        cursor.execute("ALTER TABLE logs ADD COLUMN level TEXT")
+        cursor.execute("UPDATE logs SET level = CASE status WHEN 'error' THEN 'error' WHEN 'success' THEN 'info' ELSE 'info' END")
+
     
     # Mirror: HelpCrunch customers
     cursor.execute("""
@@ -193,14 +201,14 @@ def save_settings(settings_dict):
     conn.close()
     return get_settings()
 
-def add_log(event_type, customer_name, customer_email, customer_phone, status, details):
+def add_log(event_type, customer_name, customer_email, customer_phone, status, details, level="info"):
     """Appends an event to the activity log and retains only the last 1000 items."""
     conn = get_db_connection()
     cursor = conn.cursor()
     timestamp = datetime.now().isoformat()
     cursor.execute(
-        "INSERT INTO logs (timestamp, event_type, customer_name, customer_email, customer_phone, status, details) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (timestamp, event_type, customer_name, customer_email, customer_phone, status, details)
+        "INSERT INTO logs (timestamp, event_type, customer_name, customer_email, customer_phone, status, level, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (timestamp, event_type, customer_name, customer_email, customer_phone, status, level, details)
     )
     
     # Keep only last 1000 logs to prevent unbounded DB growth

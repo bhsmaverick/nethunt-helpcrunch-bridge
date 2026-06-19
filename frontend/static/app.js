@@ -857,7 +857,8 @@ function renderLogs() {
         const timeStr = new Date(log.timestamp).toLocaleTimeString();
         
         let statusBadge = '';
-        if (log.status === 'success') statusBadge = '<span class="badge success">Успішно</span>';
+        if (log.level === 'warning') statusBadge = '<span class="badge warning">Застереження</span>';
+        else if (log.status === 'success') statusBadge = '<span class="badge success">Успішно</span>';
         else if (log.status === 'no_match') statusBadge = '<span class="badge no_match">Не знайдено</span>';
         else if (log.status === 'error') statusBadge = '<span class="badge error">Помилка</span>';
         

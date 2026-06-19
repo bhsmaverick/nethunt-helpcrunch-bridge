@@ -560,7 +560,7 @@ async def _process_sync_task(
     if not hc_api_key or not nh_email or not nh_key or not contacts_folder:
         err_msg = "Aborted: Credentials or folder mapping missing in Settings."
         details_log.append(err_msg)
-        add_log(event_type, cust_name, merged_email, merged_phone, "error", "\n".join(details_log))
+        add_log(event_type, cust_name, merged_email, merged_phone, "error", "\n".join(details_log), level="error")
         logger.error(err_msg)
         return
 
@@ -665,7 +665,7 @@ async def _process_sync_task(
                 details_log.append(f"Wrote UTM & Referrer variables: {list(tracking_fields.keys())}")
         else:
             details_log.append("Failed to create new NetHunt contact card. Aborting.")
-            add_log(event_type, cust_name, merged_email, merged_phone, "error", "\n".join(details_log))
+            add_log(event_type, cust_name, merged_email, merged_phone, "error", "\n".join(details_log), level="error")
             return
     else:
         # Existing contact was matched -> Update their UTM parameters AND any missing fields
@@ -812,7 +812,8 @@ async def _process_sync_task(
         else:
             details_log.append(f"Warning: Failed to update contact card field '{nh_link_field}' (ensure field exists in NetHunt Contacts folder).")
 
-    add_log(event_type, cust_name, merged_email, merged_phone, "success", "\n".join(details_log))
+    log_level = "warning" if any("Warning:" in d for d in details_log) else "info"
+    add_log(event_type, cust_name, merged_email, merged_phone, "success", "\n".join(details_log), level=log_level)
     logger.info(f"Sync task completed successfully for customer {cust_name}")
 
     # Update local mirror after successful processing so future chats can resolve faster
@@ -836,7 +837,7 @@ async def process_sync_task(
     except Exception as e:
         logger.exception("Unhandled error during sync task:")
         error_details = f"Unhandled exception: {e}\n{traceback.format_exc()}"
-        add_log(event_type, customer_name, customer_email, customer_phone, "error", error_details)
+        add_log(event_type, customer_name, customer_email, customer_phone, "error", error_details, level="error")
         logger.error(f"Sync task failed for customer {customer_name}: {e}")
 
 # Webhook Handler Endpoint (NOT protected - verified via HMAC)
@@ -855,7 +856,7 @@ async def webhook_handler(
     # Verification
     if webhook_secret and not helpcrunch.verify_signature(raw_body, x_helpcrunch_signature, webhook_secret):
         logger.warning("Rejected HelpCrunch webhook: Signature mismatch.")
-        add_log("webhook_rejected", "Unknown", "", "", "error", "Invalid signature in X-HelpCrunch-Signature header.")
+        add_log("webhook_rejected", "Unknown", "", "", "error", "Invalid signature in X-HelpCrunch-Signature header.", level="error")
         raise HTTPException(status_code=401, detail="Invalid signature header.")
         
     try:
