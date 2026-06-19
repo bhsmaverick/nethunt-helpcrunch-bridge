@@ -171,6 +171,11 @@ def init_db():
         "referer_field_nh": "Referer",
         "source_field_nh": "Source",
         "source_field_as_list": "false",
+        "utm_source_field_as_list": "false",
+        "utm_medium_field_as_list": "false",
+        "utm_campaign_field_as_list": "false",
+        "utm_term_field_as_list": "false",
+        "utm_content_field_as_list": "false",
         "tracking_fields_as_list": "false",
         "country_field_nh": "Country",
         "city_field_nh": "City"
