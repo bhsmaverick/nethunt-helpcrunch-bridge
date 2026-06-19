@@ -126,3 +126,74 @@ async def update_customer(api_key: str, customer_id: int, payload: dict) -> bool
     except Exception as e:
         logger.exception(f"HelpCrunch update customer error for {customer_id}:")
         return False
+
+
+# --- Bulk / sync endpoints for local mirror ---
+
+async def list_customers(api_key: str, limit: int = 100, offset: int = 0) -> dict:
+    """Fetches a page of HelpCrunch customers. Returns the raw API response dict."""
+    url = "https://api.helpcrunch.com/v1/customers"
+    headers = _get_headers(api_key)
+    params = {"limit": limit, "offset": offset}
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, params=params, timeout=30.0)
+            if response.status_code == 200:
+                return response.json()
+            logger.warning(f"Failed to list HelpCrunch customers: Status {response.status_code}, Body {response.text}")
+            return {}
+    except Exception as e:
+        logger.exception("HelpCrunch list customers error:")
+        return {}
+
+async def list_all_customers(api_key: str, page_size: int = 100, max_pages: int = 1000) -> list:
+    """Paginates through all HelpCrunch customers and returns a flat list."""
+    all_items = []
+    offset = 0
+    for page in range(max_pages):
+        data = await list_customers(api_key, limit=page_size, offset=offset)
+        if not data:
+            break
+        items = data if isinstance(data, list) else data.get("data", [])
+        if not items:
+            break
+        all_items.extend(items)
+        if len(items) < page_size:
+            break
+        offset += page_size
+    return all_items
+
+async def list_chats(api_key: str, limit: int = 100, offset: int = 0) -> dict:
+    """Fetches a page of HelpCrunch chats. Returns the raw API response dict."""
+    url = "https://api.helpcrunch.com/v1/chats"
+    headers = _get_headers(api_key)
+    params = {"limit": limit, "offset": offset}
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, params=params, timeout=30.0)
+            if response.status_code == 200:
+                return response.json()
+            logger.warning(f"Failed to list HelpCrunch chats: Status {response.status_code}, Body {response.text}")
+            return {}
+    except Exception as e:
+        logger.exception("HelpCrunch list chats error:")
+        return {}
+
+async def list_all_chats(api_key: str, page_size: int = 100, max_pages: int = 1000) -> list:
+    """Paginates through all HelpCrunch chats and returns a flat list."""
+    all_items = []
+    offset = 0
+    for page in range(max_pages):
+        data = await list_chats(api_key, limit=page_size, offset=offset)
+        if not data:
+            break
+        items = data if isinstance(data, list) else data.get("data", [])
+        if not items:
+            break
+        all_items.extend(items)
+        if len(items) < page_size:
+            break
+        offset += page_size
+    return all_items

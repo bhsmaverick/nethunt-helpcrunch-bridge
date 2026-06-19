@@ -5,7 +5,7 @@ import hashlib
 import time
 import sys
 
-URL = "http://127.0.0.1:8088/api/webhook"
+URL = "http://127.0.0.1:8091/api/webhook"
 SECRET = "" # If you set a webhook signing key in settings, specify it here to compute header signature
 
 def generate_signature(body_bytes, secret):

@@ -192,7 +192,12 @@ async def create_contact(email: str, api_key: str, base_url: str, folder_id: str
         async with httpx.AsyncClient() as client:
             response = await client.post(url, headers=headers, json=payload, timeout=10.0)
             if response.status_code in (200, 201):
-                return response.json()
+                result = response.json()
+                # NetHunt's Zapier endpoint returns the record ID under "recordId".
+                # Normalize it so downstream code can always use the "id" key.
+                if isinstance(result, dict) and "recordId" in result and "id" not in result:
+                    result["id"] = result["recordId"]
+                return result
             logger.error(f"Failed to create NetHunt contact: Status {response.status_code}, Body {response.text}")
             return None
     except Exception as e:
@@ -219,3 +224,55 @@ async def list_folder_fields(email: str, api_key: str, base_url: str, folder_id:
         logger.exception(f"NetHunt list folder fields error for {folder_id}:")
         return []
 
+
+# --- Bulk / sync endpoints for local mirror ---
+
+async def find_records(email: str, api_key: str, base_url: str, folder_id: str, query: str = "", limit: int = 1000, offset: int = 0) -> list:
+    """
+    Searches for records in a NetHunt folder. An empty query returns all records.
+    Handles list/dict/wrapped response shapes and normalizes record IDs.
+    """
+    if not folder_id:
+        return []
+
+    url = f"{_clean_base_url(base_url)}/api/v1/searches/find-record/{folder_id}"
+    params = {"query": query, "limit": limit, "offset": offset}
+    headers = _get_auth_headers(email, api_key)
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, params=params, timeout=30.0)
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, list):
+                    items = data
+                elif isinstance(data, dict) and "data" in data:
+                    items = data["data"]
+                else:
+                    items = []
+                # Normalize IDs so every record has an "id" key
+                for item in items:
+                    if isinstance(item, dict) and "recordId" in item and "id" not in item:
+                        item["id"] = item["recordId"]
+                return items
+            elif response.status_code == 404:
+                return []
+            logger.warning(f"NetHunt find_records status {response.status_code} for folder '{folder_id}': {response.text}")
+            return []
+    except Exception as e:
+        logger.exception(f"NetHunt find_records error for folder '{folder_id}':")
+        return []
+
+async def find_all_records(email: str, api_key: str, base_url: str, folder_id: str, query: str = "", page_size: int = 1000, max_pages: int = 100) -> list:
+    """Paginates through all records in a NetHunt folder and returns a flat list."""
+    all_items = []
+    offset = 0
+    for page in range(max_pages):
+        items = await find_records(email, api_key, base_url, folder_id, query=query, limit=page_size, offset=offset)
+        if not items:
+            break
+        all_items.extend(items)
+        if len(items) < page_size:
+            break
+        offset += page_size
+    return all_items

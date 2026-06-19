@@ -2,14 +2,44 @@ import hashlib
 import hmac
 import os
 import time
+import datetime
 import pyotp
 import logging
 from typing import Optional
 
 logger = logging.getLogger("bridge")
 
-# Generate session secret key on startup
-SESSION_SECRET = os.urandom(32)
+# Persistent session secret, loaded from the database in init_session_secret().
+SESSION_SECRET = None
+
+def init_session_secret():
+    """Loads or creates the persistent session secret from the SQLite database."""
+    global SESSION_SECRET
+    from .database import get_db_connection
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS session_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            secret TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute("SELECT secret FROM session_keys ORDER BY id DESC LIMIT 1")
+    row = cursor.fetchone()
+    if row:
+        SESSION_SECRET = bytes.fromhex(row["secret"])
+        logger.info("Loaded persistent session secret from database.")
+    else:
+        secret = os.urandom(32)
+        cursor.execute(
+            "INSERT INTO session_keys (secret, created_at) VALUES (?, ?)",
+            (secret.hex(), datetime.datetime.now().isoformat())
+        )
+        conn.commit()
+        SESSION_SECRET = secret
+        logger.info("Generated and persisted a new session secret in database.")
+    conn.close()
 
 def hash_password(password: str, salt: Optional[bytes] = None) -> tuple[str, str]:
     """

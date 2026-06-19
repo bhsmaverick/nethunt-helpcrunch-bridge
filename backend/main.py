@@ -3,6 +3,7 @@ import json
 import os
 import sqlite3
 import re
+import traceback
 from urllib.parse import urlparse, parse_qs
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Header, Depends, Response, Cookie
 from fastapi.responses import HTMLResponse, FileResponse
@@ -12,9 +13,10 @@ from pydantic import BaseModel
 from typing import Optional
 
 # Import local modules
-from .database import init_db, get_settings, save_settings, add_log, get_logs, get_metrics, get_db_connection
+from .database import init_db, get_settings, save_settings, add_log, get_logs, get_metrics, get_db_connection, get_mirror_stats
 from .services import nethunt, helpcrunch
-from . import auth
+from .extractors import extract_email, extract_phone, extract_messengers, extract_params_from_url, detect_platform_from_url
+from . import auth, sync_engine
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +38,7 @@ app.add_middleware(
 @app.on_event("startup")
 def startup_event():
     init_db()
+    auth.init_session_secret()
     logger.info("Database initialized successfully.")
 
 # Setup static directories
@@ -364,110 +367,20 @@ async def api_nethunt_folder_fields(payload: FolderFieldsRequest, username: str 
     fields = await nethunt.list_folder_fields(payload.email, payload.key, payload.base_url, payload.folder_id)
     return fields
 
-# --- Extraction & Normalization Helpers ---
+@app.post("/api/sync/full")
+async def api_sync_full(background_tasks: BackgroundTasks, username: str = Depends(get_current_user)):
+    """Triggers a full historical sync of CRM and HelpCrunch data into the local mirror."""
+    background_tasks.add_task(sync_engine.run_full_sync)
+    return {"status": "queued", "message": "Full sync started in the background."}
 
-def extract_email(text: str) -> Optional[str]:
-    if not text:
-        return None
-    email_pattern = re.compile(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+')
-    match = email_pattern.search(text)
-    return match.group(0) if match else None
-
-def extract_phone(text: str) -> Optional[str]:
-    if not text:
-        return None
-    phone_pattern = re.compile(r'\+?\d[\d\-\(\)\s]{7,14}\d')
-    matches = phone_pattern.findall(text)
-    for match in matches:
-        cleaned = re.sub(r'[^\d+]', '', match)
-        digit_count = sum(c.isdigit() for c in cleaned)
-        if 9 <= digit_count <= 15:
-            if cleaned.startswith("+"):
-                return cleaned
-            if cleaned.startswith("380") and len(cleaned) == 12:
-                return "+" + cleaned
-            if cleaned.startswith("0") and len(cleaned) == 10:
-                return "+38" + cleaned
-            if len(cleaned) == 9 and cleaned.startswith(("50", "63", "66", "67", "68", "73", "89", "91", "92", "93", "94", "95", "96", "97", "98", "99")):
-                return "+380" + cleaned
-            if len(cleaned) >= 10:
-                return "+" + cleaned
-            return cleaned
-    return None
-
-def extract_messengers(text: str) -> dict:
-    results = {}
-    if not text:
-        return results
-    
-    text_lower = text.lower()
-    
-    # 1. Telegram
-    tg_link_match = re.search(r'(?:t\.me|telegram\.me)/([a-zA-Z0-9_]{5,32})', text)
-    if tg_link_match:
-        results["telegram"] = tg_link_match.group(1)
-    else:
-        tg_prefix_match = re.search(r'(?:tg|telegram|телеграм|тг)(?:\s*[:=-]\s*@?|\s+@)([a-zA-Z0-9_]{5,32})', text_lower)
-        if tg_prefix_match:
-            start, end = tg_prefix_match.span(1)
-            results["telegram"] = text[start:end]
-        else:
-            at_matches = re.finditer(r'@([a-zA-Z0-9_]{5,32})', text)
-            for m in at_matches:
-                start_idx = m.start()
-                if start_idx == 0 or not text[start_idx-1].isalnum():
-                    domain_text = text[m.end():m.end()+10]
-                    if not re.match(r'^\.[a-zA-Z]{2,4}', domain_text):
-                        results["telegram"] = m.group(1)
-                        break
-                        
-    # 2. Instagram
-    ig_link_match = re.search(r'(?:instagram\.com|instagr\.am)/([a-zA-Z0-9_.]+)', text)
-    if ig_link_match:
-        handle = ig_link_match.group(1)
-        if handle.endswith("/"):
-            handle = handle[:-1]
-        results["instagram"] = handle
-    else:
-        ig_prefix_match = re.search(r'(?:instagram|insta|інстаграм|інста|ig)(?:\s*[:=-]\s*@?|\s+@)([a-zA-Z0-9_.]+)', text_lower)
-        if ig_prefix_match:
-            start, end = ig_prefix_match.span(1)
-            results["instagram"] = text[start:end]
-            
-    return results
-
-def extract_params_from_url(url_str: str) -> dict:
-    if not url_str:
-        return {}
-    try:
-        parsed = urlparse(url_str)
-        return {k: v[0] for k, v in parse_qs(parsed.query).items() if v}
-    except Exception:
-        return {}
-
-def detect_platform_from_url(url_str: str) -> str:
-    if not url_str:
-        return ""
-    url_lower = url_str.lower()
-    if "t.me" in url_lower or "telegram.org" in url_lower:
-        return "Telegram"
-    if "instagram.com" in url_lower or "instagr.am" in url_lower:
-        return "Instagram"
-    if "facebook.com" in url_lower or "fb.com" in url_lower:
-        return "Facebook"
-    if "youtube.com" in url_lower or "youtu.be" in url_lower:
-        return "YouTube"
-    if "viber.com" in url_lower:
-        return "Viber"
-    if "whatsapp.com" in url_lower or "wa.me" in url_lower:
-        return "WhatsApp"
-    if "google" in url_lower:
-        return "Google"
-    return ""
+@app.get("/api/sync/stats")
+async def api_sync_stats(username: str = Depends(get_current_user)):
+    """Returns counts of mirrored entities."""
+    return get_mirror_stats()
 
 # --- Webhook Synchronizer Business Logic ---
 
-async def process_sync_task(
+async def _process_sync_task(
     event_type: str, 
     customer_data: dict, 
     chat_id: Optional[int] = None, 
@@ -670,8 +583,18 @@ async def process_sync_task(
     contact = None
     search_method_used = ""
     
-    # STEP 0: First try searching by HelpCrunch ID (which is the most reliable way to prevent duplicates)
-    if hc_id_nh_key and customer_id:
+    # STEP 0: Try the local mirror first (chat_link, phone, email, telegram, instagram)
+    try:
+        local_contact = await sync_engine.resolve_nh_contact(customer_data, chat_id)
+        if local_contact and local_contact.get("raw_json"):
+            contact = json.loads(local_contact["raw_json"])
+            search_method_used = "Local Mirror"
+            details_log.append(f"Matched existing NetHunt contact via local mirror: ID={local_contact.get('nh_record_id')}")
+    except Exception:
+        logger.exception("Local mirror contact resolution failed:")
+    
+    # STEP 1: Search by HelpCrunch ID if local mirror did not find a match
+    if not contact and hc_id_nh_key and customer_id:
         details_log.append(f"Searching NetHunt by HelpCrunch ID: '{customer_id}' (Field: '{hc_id_nh_key}')...")
         # Exact field query syntax: Field_Name:"value"
         query_str = f'`{hc_id_nh_key}`:"{customer_id}"'
@@ -781,7 +704,7 @@ async def process_sync_task(
                 details_log.append("Warning: Could not update NetHunt contact fields.")
 
     contact_id = contact.get("id")
-    contact_name = contact.get("name") or cust_name
+    contact_name = contact.get("name") or contact.get("fields", {}).get("Name") or cust_name
     details_log.append(f"Using NetHunt Contact: Name='{contact_name}', ID={contact_id} ({search_method_used})")
 
     # Build Contact Card Link
@@ -891,6 +814,30 @@ async def process_sync_task(
 
     add_log(event_type, cust_name, merged_email, merged_phone, "success", "\n".join(details_log))
     logger.info(f"Sync task completed successfully for customer {cust_name}")
+
+    # Update local mirror after successful processing so future chats can resolve faster
+    try:
+        await sync_engine.update_mirror_from_webhook(customer_data, chat_id, contact_id)
+    except Exception:
+        logger.exception("Failed to update local mirror from webhook:")
+
+async def process_sync_task(
+    event_type: str,
+    customer_data: dict,
+    chat_id: Optional[int] = None,
+    message_text: Optional[str] = None
+):
+    """Wrapper around _process_sync_task that catches unhandled exceptions and logs them."""
+    customer_name = customer_data.get("name") or "Unknown Customer"
+    customer_email = customer_data.get("email") or ""
+    customer_phone = customer_data.get("phone") or ""
+    try:
+        await _process_sync_task(event_type, customer_data, chat_id, message_text)
+    except Exception as e:
+        logger.exception("Unhandled error during sync task:")
+        error_details = f"Unhandled exception: {e}\n{traceback.format_exc()}"
+        add_log(event_type, customer_name, customer_email, customer_phone, "error", error_details)
+        logger.error(f"Sync task failed for customer {customer_name}: {e}")
 
 # Webhook Handler Endpoint (NOT protected - verified via HMAC)
 @app.post("/api/webhook")

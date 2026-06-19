@@ -19,4 +19,12 @@ backend/bridge.db
 *.njsproj
 *.sln
 *.swp
+
+# Data and build artifacts
 data/
+deploy-package.zip
+
+# Generated analysis / scratch files
+graphify-out/
+backend/graphify-out/
+scratch/
