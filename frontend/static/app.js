@@ -55,7 +55,6 @@ const fieldLinkNhInput = document.getElementById('field-link-nh');
 
 // UTM mappings
 const utmSourceNhInput = document.getElementById('utm-source-nh');
-const utmSourceAsListInput = document.getElementById('utm-source-as-list');
 const utmMediumNhInput = document.getElementById('utm-medium-nh');
 const utmCampaignNhInput = document.getElementById('utm-campaign-nh');
 const utmTermNhInput = document.getElementById('utm-term-nh');
@@ -400,7 +399,6 @@ async function loadSettings() {
         
         // Populate UTM tracking inputs
         utmSourceNhInput.value = settings.utm_source_field_nh || 'utm_source';
-        utmSourceAsListInput.checked = settings.utm_source_field_as_list === 'true';
         utmMediumNhInput.value = settings.utm_medium_field_nh || 'utm_medium';
         utmCampaignNhInput.value = settings.utm_campaign_field_nh || 'utm_campaign';
         utmTermNhInput.value = settings.utm_term_field_nh || 'utm_term';
@@ -735,7 +733,6 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
         
         // Include UTM mapping fields
         utm_source_field_nh: utmSourceNhInput.value.trim(),
-        utm_source_field_as_list: utmSourceAsListInput.checked ? 'true' : 'false',
         utm_medium_field_nh: utmMediumNhInput.value.trim(),
         utm_campaign_field_nh: utmCampaignNhInput.value.trim(),
         utm_term_field_nh: utmTermNhInput.value.trim(),
