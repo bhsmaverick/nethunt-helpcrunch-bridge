@@ -174,20 +174,21 @@ async def update_contact(email: str, api_key: str, base_url: str, record_id: str
         logger.exception(f"NetHunt update contact error for record '{record_id}':")
         return False
 
-async def create_contact(email: str, api_key: str, base_url: str, folder_id: str, fields: dict) -> dict:
+async def create_contact(email: str, api_key: str, base_url: str, folder_id: str, fields: dict) -> tuple:
     """
     Creates a new contact record in NetHunt CRM.
+    Returns (record_dict, error_message). On success error_message is None.
     """
     if not folder_id or not fields:
-        return None
-        
+        return None, "Missing folder_id or fields for create_contact"
+
     url = f"{_clean_base_url(base_url)}/api/v1/zapier/actions/create-record/{folder_id}"
     headers = _get_auth_headers(email, api_key)
     payload = {
         "fields": fields,
         "timeZone": "Europe/Kiev"
     }
-    
+
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, headers=headers, json=payload, timeout=10.0)
@@ -197,12 +198,13 @@ async def create_contact(email: str, api_key: str, base_url: str, folder_id: str
                 # Normalize it so downstream code can always use the "id" key.
                 if isinstance(result, dict) and "recordId" in result and "id" not in result:
                     result["id"] = result["recordId"]
-                return result
-            logger.error(f"Failed to create NetHunt contact: Status {response.status_code}, Body {response.text}")
-            return None
+                return result, None
+            error_msg = f"Failed to create NetHunt contact: Status {response.status_code}, Body {response.text}"
+            logger.error(error_msg)
+            return None, error_msg
     except Exception as e:
         logger.exception("NetHunt create contact error:")
-        return None
+        return None, f"NetHunt create contact error: {e}"
 
 async def list_folder_fields(email: str, api_key: str, base_url: str, folder_id: str) -> list:
     """

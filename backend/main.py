@@ -88,6 +88,7 @@ class SettingsUpdate(BaseModel):
     telegram_field_hc: Optional[str] = "telegram"
     telegram_field_nh: Optional[str] = "Telegram"
     instagram_field_nh: Optional[str] = "Instagram"
+    name_field_nh: Optional[str] = "Name"
     phone_field_nh: Optional[str] = "Phone"
     email_field_nh: Optional[str] = "Email"
     hc_id_field_nh: Optional[str] = "HelpCrunch ID"
@@ -397,6 +398,7 @@ async def _process_sync_task(
     telegram_hc_key = settings.get("telegram_field_hc", "telegram")
     telegram_nh_key = settings.get("telegram_field_nh", "Telegram")
     instagram_nh_key = settings.get("instagram_field_nh", "Instagram")
+    name_nh_key = settings.get("name_field_nh", "Name")
     phone_nh_key = settings.get("phone_field_nh", "Phone")
     email_nh_key = settings.get("email_field_nh", "Email")
     hc_id_nh_key = settings.get("hc_id_field_nh", "HelpCrunch ID")
@@ -633,9 +635,9 @@ async def _process_sync_task(
         details_log.append("No matching contact found in NetHunt CRM. Creating a new contact card...")
         
         # Build payload fields for NetHunt create contact
-        new_fields = {
-            "Name": cust_name
-        }
+        new_fields = {}
+        if name_nh_key and cust_name:
+            new_fields[name_nh_key] = cust_name
         if customer_id and hc_id_nh_key:
             new_fields[hc_id_nh_key] = str(customer_id)
         if merged_email and email_nh_key:
@@ -655,7 +657,7 @@ async def _process_sync_task(
             chat_url = f"https://{hc_subdomain.strip()}.helpcrunch.com/inbox/chats/{chat_id}"
             new_fields[nh_link_field] = chat_url
             
-        created_contact = await nethunt.create_contact(nh_email, nh_key, nh_base, contacts_folder, new_fields)
+        created_contact, create_error = await nethunt.create_contact(nh_email, nh_key, nh_base, contacts_folder, new_fields)
         if created_contact:
             contact = created_contact
             is_new_contact = True
@@ -665,6 +667,8 @@ async def _process_sync_task(
                 details_log.append(f"Wrote UTM & Referrer variables: {list(tracking_fields.keys())}")
         else:
             details_log.append("Failed to create new NetHunt contact card. Aborting.")
+            if create_error:
+                details_log.append(f"API error: {create_error}")
             add_log(event_type, cust_name, merged_email, merged_phone, "error", "\n".join(details_log), level="error")
             return
     else:
@@ -704,7 +708,8 @@ async def _process_sync_task(
                 details_log.append("Warning: Could not update NetHunt contact fields.")
 
     contact_id = contact.get("id")
-    contact_name = contact.get("name") or contact.get("fields", {}).get("Name") or cust_name
+    contact_fields = contact.get("fields", {})
+    contact_name = contact.get("name") or contact_fields.get(name_nh_key) or contact_fields.get("Name") or cust_name
     details_log.append(f"Using NetHunt Contact: Name='{contact_name}', ID={contact_id} ({search_method_used})")
 
     # Build Contact Card Link

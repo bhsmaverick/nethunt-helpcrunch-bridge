@@ -156,6 +156,7 @@ def init_db():
         "telegram_field_hc": "telegram",  # customData key
         "telegram_field_nh": "Telegram",   # NetHunt CRM field name
         "instagram_field_nh": "Instagram", # NetHunt CRM field name
+        "name_field_nh": "Name",          # NetHunt CRM field name for contact name
         "phone_field_nh": "Phone",        # NetHunt CRM field name
         "email_field_nh": "Email",        # NetHunt CRM field name
         "hc_id_field_nh": "HelpCrunch ID", # NetHunt CRM field name for HC Customer ID

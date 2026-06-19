@@ -43,6 +43,7 @@ const nhFolderContactsSelect = document.getElementById('nh-folder-contacts');
 const nhFolderDealsSelect = document.getElementById('nh-folder-deals');
 const syncPriorityInput = document.getElementById('sync-priority');
 const fieldTgHcInput = document.getElementById('field-tg-hc');
+const fieldNameNhInput = document.getElementById('field-name-nh');
 const fieldEmailNhInput = document.getElementById('field-email-nh');
 const fieldPhoneNhInput = document.getElementById('field-phone-nh');
 const fieldTgNhInput = document.getElementById('field-tg-nh');
@@ -387,6 +388,7 @@ async function loadSettings() {
         nhBaseUrlInput.value = settings.nethunt_base_url || 'https://nethunt.co';
         syncPriorityInput.value = settings.sync_priority || 'email,phone,telegram';
         fieldTgHcInput.value = settings.telegram_field_hc || 'telegram';
+        fieldNameNhInput.value = settings.name_field_nh || 'Name';
         fieldEmailNhInput.value = settings.email_field_nh || 'Email';
         fieldPhoneNhInput.value = settings.phone_field_nh || 'Phone';
         fieldTgNhInput.value = settings.telegram_field_nh || 'Telegram';
@@ -530,6 +532,7 @@ function populateFolderOptions() {
 
 // NetHunt field mapping dropdowns list
 const nhFieldSelects = [
+    { select: fieldNameNhInput, settingKey: 'name_field_nh', label: 'Name' },
     { select: fieldEmailNhInput, settingKey: 'email_field_nh', label: 'Email' },
     { select: fieldPhoneNhInput, settingKey: 'phone_field_nh', label: 'Phone' },
     { select: fieldTgNhInput, settingKey: 'telegram_field_nh', label: 'Telegram' },
@@ -722,6 +725,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
         hc_id_field_nh: fieldHcIdNhInput.value,
         phone_field_nh: fieldPhoneNhInput.value,
         email_field_nh: fieldEmailNhInput.value,
+        name_field_nh: fieldNameNhInput.value,
         update_nh_chat_link: checkboxUpdateNhChatLink.checked ? 'true' : 'false',
         nh_chat_link_field: fieldLinkNhInput.value.trim(),
         
