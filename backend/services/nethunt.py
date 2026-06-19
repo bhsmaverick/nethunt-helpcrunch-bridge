@@ -229,7 +229,7 @@ async def list_folder_fields(email: str, api_key: str, base_url: str, folder_id:
 
 async def find_records(email: str, api_key: str, base_url: str, folder_id: str, query: str = "", limit: int = 1000, offset: int = 0) -> list:
     """
-    Searches for records in a NetHunt folder. An empty query returns all records.
+    Searches for records in a NetHunt folder.
     Handles list/dict/wrapped response shapes and normalizes record IDs.
     """
     if not folder_id:
@@ -263,16 +263,52 @@ async def find_records(email: str, api_key: str, base_url: str, folder_id: str, 
         logger.exception(f"NetHunt find_records error for folder '{folder_id}':")
         return []
 
+
+async def list_all_records_since(email: str, api_key: str, base_url: str, folder_id: str, since: str, limit: int = 1000) -> list:
+    """
+    Lists records created/updated since a given timestamp using the NetHunt trigger endpoint.
+    This is the reliable way to fetch all records for a folder (use since=1970-01-01 for full sync).
+    """
+    if not folder_id:
+        return []
+
+    url = f"{_clean_base_url(base_url)}/api/v1/zapier/triggers/new-record/{folder_id}"
+    params = {"since": since, "limit": limit}
+    headers = _get_auth_headers(email, api_key)
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, params=params, timeout=60.0)
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, list):
+                    items = data
+                elif isinstance(data, dict) and "data" in data:
+                    items = data["data"]
+                else:
+                    items = []
+                for item in items:
+                    if isinstance(item, dict) and "recordId" in item and "id" not in item:
+                        item["id"] = item["recordId"]
+                logger.info(f"NetHunt list_all_records_since returned {len(items)} records for folder '{folder_id}'")
+                return items
+            elif response.status_code == 404:
+                logger.warning(f"NetHunt list_all_records_since 404 for folder '{folder_id}'")
+                return []
+            logger.warning(f"NetHunt list_all_records_since status {response.status_code} for folder '{folder_id}': {response.text}")
+            return []
+    except Exception as e:
+        logger.exception(f"NetHunt list_all_records_since error for folder '{folder_id}':")
+        return []
+
+
 async def find_all_records(email: str, api_key: str, base_url: str, folder_id: str, query: str = "", page_size: int = 1000, max_pages: int = 100) -> list:
-    """Paginates through all records in a NetHunt folder and returns a flat list."""
-    all_items = []
-    offset = 0
-    for page in range(max_pages):
-        items = await find_records(email, api_key, base_url, folder_id, query=query, limit=page_size, offset=offset)
-        if not items:
-            break
-        all_items.extend(items)
-        if len(items) < page_size:
-            break
-        offset += page_size
-    return all_items
+    """
+    Fetches all records in a NetHunt folder.
+    Uses the trigger endpoint since the search endpoint with empty query is unreliable for full listing.
+    """
+    if not folder_id:
+        return []
+    since = "1970-01-01T00:00:00.000Z"
+    items = await list_all_records_since(email, api_key, base_url, folder_id, since=since, limit=10000)
+    return items
