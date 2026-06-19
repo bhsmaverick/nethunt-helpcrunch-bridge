@@ -30,6 +30,7 @@ const authVerify2faForm = document.getElementById('auth-verify-2fa-form');
 const qrCodeImg = document.getElementById('qr-code-img');
 const qrSecretKey = document.getElementById('qr-secret-key');
 const btnLogout = document.getElementById('btn-logout');
+const btnFullSync = document.getElementById('btn-full-sync');
 
 // Settings inputs
 const hcApiKeyInput = document.getElementById('hc-api-key');
@@ -916,6 +917,32 @@ function updateDetailsPanel(log) {
     detStatus.className = `value badge ${log.status}`;
     
     detTrace.textContent = log.details || '';
+}
+
+// Full sync trigger
+async function triggerFullSync() {
+    if (!btnFullSync) return;
+    btnFullSync.disabled = true;
+    btnFullSync.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Синхронізація...';
+    
+    try {
+        const res = await secureFetch('/api/sync/full', { method: 'POST' });
+        const data = await res.json();
+        if (res.ok) {
+            showToast('Повна синхронізація запущена у фоні', 'success');
+        } else {
+            showToast(data.detail || 'Не вдалося запустити синхронізацію', 'error');
+        }
+    } catch (err) {
+        showToast('Помилка запуску синхронізації', 'error');
+    } finally {
+        btnFullSync.disabled = false;
+        btnFullSync.innerHTML = '<i class="fa-solid fa-rotate"></i> Повна синхронізація';
+    }
+}
+
+if (btnFullSync) {
+    btnFullSync.addEventListener('click', triggerFullSync);
 }
 
 // Log refresh actions
