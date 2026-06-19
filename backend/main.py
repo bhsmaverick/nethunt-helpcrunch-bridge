@@ -102,8 +102,6 @@ class SettingsUpdate(BaseModel):
     gclid_field_nh: Optional[str] = "gclid"
     referer_field_nh: Optional[str] = "Referer"
     source_field_nh: Optional[str] = "Source"
-    source_field_as_list: Optional[str] = "false"
-    tracking_fields_as_list: Optional[str] = "false"
     country_field_nh: Optional[str] = "Country"
     city_field_nh: Optional[str] = "City"
 
@@ -419,8 +417,6 @@ async def _process_sync_task(
     source_f = settings.get("source_field_nh", "Source")
     country_f = settings.get("country_field_nh", "Country")
     city_f = settings.get("city_field_nh", "City")
-    tracking_as_list = settings.get("tracking_fields_as_list") == "true"
-    source_as_list = settings.get("source_field_as_list") == "true"
 
     customer_id = customer_data.get("id")
     cust_name = customer_data.get("name") or "Unknown Customer"
@@ -571,24 +567,19 @@ async def _process_sync_task(
         return
 
     # Build UTM and tracking fields payload to update/write in NetHunt CRM
-    def _nh_tracking_value(val):
-        # NetHunt multi-select fields expect arrays; text fields expect a scalar.
-        return [val] if tracking_as_list else val
-
     tracking_fields = {}
-    if utm_src_f and utm_source: tracking_fields[utm_src_f] = _nh_tracking_value(utm_source)
-    if utm_med_f and utm_medium: tracking_fields[utm_med_f] = _nh_tracking_value(utm_medium)
-    if utm_cam_f and utm_campaign: tracking_fields[utm_cam_f] = _nh_tracking_value(utm_campaign)
-    if utm_trm_f and utm_term: tracking_fields[utm_trm_f] = _nh_tracking_value(utm_term)
-    if utm_cnt_f and utm_content: tracking_fields[utm_cnt_f] = _nh_tracking_value(utm_content)
-    if gclid_f and gclid: tracking_fields[gclid_f] = _nh_tracking_value(gclid)
-    if referer_f and cust_referer: tracking_fields[referer_f] = _nh_tracking_value(cust_referer)
+    if utm_src_f and utm_source: tracking_fields[utm_src_f] = utm_source
+    if utm_med_f and utm_medium: tracking_fields[utm_med_f] = utm_medium
+    if utm_cam_f and utm_campaign: tracking_fields[utm_cam_f] = utm_campaign
+    if utm_trm_f and utm_term: tracking_fields[utm_trm_f] = utm_term
+    if utm_cnt_f and utm_content: tracking_fields[utm_cnt_f] = utm_content
+    if gclid_f and gclid: tracking_fields[gclid_f] = gclid
+    if referer_f and cust_referer: tracking_fields[referer_f] = cust_referer
     if source_f:
         # Save detected platform if available, otherwise fallback to URL
-        source_val = detected_platform if detected_platform else (cust_source or "Organic/Direct")
-        tracking_fields[source_f] = [source_val] if source_as_list else source_val
-    if country_f and cust_country: tracking_fields[country_f] = _nh_tracking_value(cust_country)
-    if city_f and cust_city: tracking_fields[city_f] = _nh_tracking_value(cust_city)
+        tracking_fields[source_f] = detected_platform if detected_platform else (cust_source or "Organic/Direct")
+    if country_f and cust_country: tracking_fields[country_f] = cust_country
+    if city_f and cust_city: tracking_fields[city_f] = cust_city
 
     # Sequentially look up contact in NetHunt
     contact = None
