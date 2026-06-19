@@ -62,6 +62,7 @@ const utmContentNhInput = document.getElementById('utm-content-nh');
 const gclidNhInput = document.getElementById('gclid-nh');
 const refererNhInput = document.getElementById('referer-nh');
 const sourceNhInput = document.getElementById('source-nh');
+const sourceFieldAsListInput = document.getElementById('source-field-as-list');
 const countryNhInput = document.getElementById('country-nh');
 const cityNhInput = document.getElementById('city-nh');
 
@@ -405,6 +406,7 @@ async function loadSettings() {
         gclidNhInput.value = settings.gclid_field_nh || 'gclid';
         refererNhInput.value = settings.referer_field_nh || 'Referer';
         sourceNhInput.value = settings.source_field_nh || 'Source';
+        sourceFieldAsListInput.checked = settings.source_field_as_list === 'true';
         countryNhInput.value = settings.country_field_nh || 'Country';
         cityNhInput.value = settings.city_field_nh || 'City';
         
@@ -738,6 +740,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
         gclid_field_nh: gclidNhInput.value.trim(),
         referer_field_nh: refererNhInput.value.trim(),
         source_field_nh: sourceNhInput.value.trim(),
+        source_field_as_list: sourceFieldAsListInput.checked ? 'true' : 'false',
         country_field_nh: countryNhInput.value.trim(),
         city_field_nh: cityNhInput.value.trim()
     };

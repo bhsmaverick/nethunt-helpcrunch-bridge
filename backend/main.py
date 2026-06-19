@@ -102,6 +102,7 @@ class SettingsUpdate(BaseModel):
     gclid_field_nh: Optional[str] = "gclid"
     referer_field_nh: Optional[str] = "Referer"
     source_field_nh: Optional[str] = "Source"
+    source_field_as_list: Optional[str] = "false"
     tracking_fields_as_list: Optional[str] = "false"
     country_field_nh: Optional[str] = "Country"
     city_field_nh: Optional[str] = "City"
@@ -419,6 +420,7 @@ async def _process_sync_task(
     country_f = settings.get("country_field_nh", "Country")
     city_f = settings.get("city_field_nh", "City")
     tracking_as_list = settings.get("tracking_fields_as_list") == "true"
+    source_as_list = settings.get("source_field_as_list") == "true"
 
     customer_id = customer_data.get("id")
     cust_name = customer_data.get("name") or "Unknown Customer"
@@ -584,7 +586,7 @@ async def _process_sync_task(
     if source_f:
         # Save detected platform if available, otherwise fallback to URL
         source_val = detected_platform if detected_platform else (cust_source or "Organic/Direct")
-        tracking_fields[source_f] = _nh_tracking_value(source_val)
+        tracking_fields[source_f] = [source_val] if source_as_list else source_val
     if country_f and cust_country: tracking_fields[country_f] = _nh_tracking_value(cust_country)
     if city_f and cust_city: tracking_fields[city_f] = _nh_tracking_value(cust_city)
 
