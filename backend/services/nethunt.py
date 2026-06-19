@@ -62,7 +62,7 @@ async def find_contact(email: str, api_key: str, base_url: str, folder_id: str, 
     if not folder_id or not query:
         return None
         
-    url = f"{_clean_base_url(base_url)}/api/v1/searches/find-record/{folder_id}"
+    url = f"{_clean_base_url(base_url)}/api/v1/zapier/searches/find-record/{folder_id}"
     params = {"query": query, "limit": 1}
     headers = _get_auth_headers(email, api_key)
     
@@ -94,7 +94,7 @@ async def find_deals(email: str, api_key: str, base_url: str, deals_folder_id: s
     if not deals_folder_id or not contact_record_id:
         return []
         
-    url = f"{_clean_base_url(base_url)}/api/v1/searches/find-record/{deals_folder_id}"
+    url = f"{_clean_base_url(base_url)}/api/v1/zapier/searches/find-record/{deals_folder_id}"
     params = {"query": contact_record_id, "limit": 10}
     headers = _get_auth_headers(email, api_key)
     
@@ -237,7 +237,7 @@ async def find_records(email: str, api_key: str, base_url: str, folder_id: str, 
     if not folder_id:
         return []
 
-    url = f"{_clean_base_url(base_url)}/api/v1/searches/find-record/{folder_id}"
+    url = f"{_clean_base_url(base_url)}/api/v1/zapier/searches/find-record/{folder_id}"
     params = {"query": query, "limit": limit, "offset": offset}
     headers = _get_auth_headers(email, api_key)
 

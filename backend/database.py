@@ -170,6 +170,7 @@ def init_db():
         "gclid_field_nh": "gclid",
         "referer_field_nh": "Referer",
         "source_field_nh": "Source",
+        "tracking_fields_as_list": "false",
         "country_field_nh": "Country",
         "city_field_nh": "City"
     }
