@@ -304,13 +304,61 @@ async def list_all_records_since(email: str, api_key: str, base_url: str, folder
         return []
 
 
+def _record_created_at(item: dict) -> str:
+    """Extracts the record creation timestamp from a NetHunt record."""
+    if not isinstance(item, dict):
+        return ""
+    return item.get("createdAt") or item.get("createdTime") or item.get("created_at") or ""
+
+
 async def find_all_records(email: str, api_key: str, base_url: str, folder_id: str, query: str = "", page_size: int = 1000, max_pages: int = 100) -> list:
     """
     Fetches all records in a NetHunt folder.
-    Uses the trigger endpoint since the search endpoint with empty query is unreliable for full listing.
+    Uses the new-record trigger endpoint and paginates by the latest createdAt
+    because NetHunt caps the response at 10,000 records per request.
     """
     if not folder_id:
         return []
+
+    page_size = 10000
+    max_pages = 20
     since = "1970-01-01T00:00:00.000Z"
-    items = await list_all_records_since(email, api_key, base_url, folder_id, since=since, limit=10000)
-    return items
+    all_items = []
+    seen_ids = set()
+
+    for page in range(max_pages):
+        items = await list_all_records_since(email, api_key, base_url, folder_id, since=since, limit=page_size)
+        if not items:
+            break
+
+        new_items = []
+        for item in items:
+            record_id = item.get("id") or item.get("recordId")
+            if record_id in seen_ids:
+                continue
+            seen_ids.add(record_id)
+            new_items.append(item)
+
+        if not new_items:
+            break
+        all_items.extend(new_items)
+
+        if len(items) < page_size:
+            break
+
+        # Find the latest createdAt in the returned page to use as the next cursor.
+        latest_ts = ""
+        for item in items:
+            ts = _record_created_at(item)
+            if ts and ts > latest_ts:
+                latest_ts = ts
+
+        if not latest_ts:
+            logger.warning(f"NetHunt find_all_records: could not determine latest createdAt for folder '{folder_id}', stopping pagination.")
+            break
+
+        since = latest_ts
+        logger.info(f"NetHunt find_all_records page {page + 1}: {len(new_items)} new records, latest createdAt={since}, total={len(all_items)}")
+
+    logger.info(f"NetHunt find_all_records finished for folder '{folder_id}': total={len(all_items)}")
+    return all_items
