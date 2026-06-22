@@ -97,9 +97,9 @@ def parse_nh_contact(record: dict, folder_id: str, settings: dict) -> dict:
     phone = normalize_phone(_first_value(fields.get(phone_field)))
     telegram = normalize_telegram(_first_value(fields.get(telegram_field)))
     instagram = normalize_instagram(_first_value(fields.get(instagram_field)))
-    chat_link = str(fields.get(chat_link_field) or "").strip()
+    chat_link = _first_value(fields.get(chat_link_field)).strip()
 
-    name = record.get("name") or fields.get("Name") or ""
+    name = record.get("name") or _first_value(fields.get("Name")) or ""
 
     return {
         "nh_record_id": str(record_id),
@@ -117,24 +117,24 @@ def parse_nh_deal(record: dict, folder_id: str) -> dict:
     """Extracts key fields from a NetHunt deal record."""
     fields = record.get("fields", {}) or {}
     record_id = record.get("id") or record.get("recordId")
-    name = record.get("name") or fields.get("Name") or "Untitled Deal"
+    name = record.get("name") or _first_value(fields.get("Name")) or "Untitled Deal"
 
     stage = ""
     for field_name in ["Stage", "Deal Stage", "Status", "Pipeline Stage", "pipelineStage"]:
         if field_name in fields and fields[field_name] is not None:
-            stage = str(fields[field_name])
+            stage = _first_value(fields[field_name])
             break
 
     amount = ""
     for field_name in ["Amount", "Deal Amount", "Value", "value", "Price"]:
         if field_name in fields and fields[field_name] is not None:
-            amount = str(fields[field_name])
+            amount = _first_value(fields[field_name])
             break
 
     contact_id = ""
     for field_name in ["Contact", "Контакт", "Клієнт", "contact", "Customer"]:
         if field_name in fields and fields[field_name] is not None:
-            contact_id = str(fields[field_name])
+            contact_id = _first_value(fields[field_name])
             break
 
     return {
@@ -394,7 +394,7 @@ async def resolve_nh_contact(customer_data: dict, chat_id: Optional[int]) -> Opt
     return None
 
 
-async def update_mirror_from_webhook(customer_data: dict, chat_id: Optional[int], contact_id: Optional[str]):
+async def update_mirror_from_webhook(customer_data: dict, chat_id: Optional[int], contact_id: Optional[str], nh_contact_data: Optional[dict] = None):
     """Updates the local mirror after a chat webhook has been processed."""
     settings = get_settings()
     profile = parse_hc_customer_profile(customer_data, settings)
@@ -441,6 +441,23 @@ async def update_mirror_from_webhook(customer_data: dict, chat_id: Optional[int]
                     raw_json=contact["raw_json"],
                 )
                 save_match_link(hc_customer_id, contact_id, "chat_link", "high")
+            elif nh_contact_data:
+                # Newly created contact not yet in local mirror — save it
+                contacts_folder = settings.get("nethunt_contacts_folder", "")
+                parsed = parse_nh_contact(nh_contact_data, contacts_folder, settings)
+                save_nh_contact(
+                    nh_record_id=parsed["nh_record_id"],
+                    folder_id=parsed["folder_id"],
+                    name=parsed["name"],
+                    email=parsed["email"],
+                    phone=parsed["phone"],
+                    telegram=parsed["telegram"],
+                    instagram=parsed["instagram"],
+                    chat_link=chat_link,
+                    hc_customer_id=hc_customer_id,
+                    raw_json=json.dumps(nh_contact_data),
+                )
+                save_match_link(hc_customer_id, parsed["nh_record_id"], "chat_link", "high")
     elif contact_id:
         # No chat_id, but we still have a CRM contact match
         contact = get_nh_contact_by_id(contact_id)
@@ -458,3 +475,20 @@ async def update_mirror_from_webhook(customer_data: dict, chat_id: Optional[int]
                 raw_json=contact["raw_json"],
             )
             save_match_link(hc_customer_id, contact_id, "webhook", "high")
+        elif not contact and nh_contact_data:
+            # Newly created contact not yet in local mirror — save it
+            contacts_folder = settings.get("nethunt_contacts_folder", "")
+            parsed = parse_nh_contact(nh_contact_data, contacts_folder, settings)
+            save_nh_contact(
+                nh_record_id=parsed["nh_record_id"],
+                folder_id=parsed["folder_id"],
+                name=parsed["name"],
+                email=parsed["email"],
+                phone=parsed["phone"],
+                telegram=parsed["telegram"],
+                instagram=parsed["instagram"],
+                chat_link=parsed["chat_link"],
+                hc_customer_id=hc_customer_id,
+                raw_json=json.dumps(nh_contact_data),
+            )
+            save_match_link(hc_customer_id, parsed["nh_record_id"], "webhook", "high")

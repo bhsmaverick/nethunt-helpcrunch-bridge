@@ -41,26 +41,18 @@ def extract_messengers(text: str) -> dict:
 
     text_lower = text.lower()
 
-    # 1. Telegram
+    # 1. Telegram link (t.me/handle)
     tg_link_match = re.search(r'(?:t\.me|telegram\.me)/([a-zA-Z0-9_]{5,32})', text)
     if tg_link_match:
         results["telegram"] = tg_link_match.group(1)
     else:
-        tg_prefix_match = re.search(r'(?:tg|telegram|телеграм|тг)(?:\s*[:=-]\s*@?|\s+@)([a-zA-Z0-9_]{5,32})', text_lower)
+        # 2. Telegram prefix (telegram: @handle, tg: @handle)
+        tg_prefix_match = re.search(r'\b(?:tg|telegram|телеграм|тг)(?:\s*[:=-]\s*@?|\s+@)([a-zA-Z0-9_]{5,32})', text_lower)
         if tg_prefix_match:
             start, end = tg_prefix_match.span(1)
             results["telegram"] = text[start:end]
-        else:
-            at_matches = re.finditer(r'@([a-zA-Z0-9_]{5,32})', text)
-            for m in at_matches:
-                start_idx = m.start()
-                if start_idx == 0 or not text[start_idx-1].isalnum():
-                    domain_text = text[m.end():m.end()+10]
-                    if not re.match(r'^\.[a-zA-Z]{2,4}', domain_text):
-                        results["telegram"] = m.group(1)
-                        break
 
-    # 2. Instagram
+    # 3. Instagram link (instagram.com/handle)
     ig_link_match = re.search(r'(?:instagram\.com|instagr\.am)/([a-zA-Z0-9_.]+)', text)
     if ig_link_match:
         handle = ig_link_match.group(1)
@@ -68,10 +60,26 @@ def extract_messengers(text: str) -> dict:
             handle = handle[:-1]
         results["instagram"] = handle
     else:
-        ig_prefix_match = re.search(r'(?:instagram|insta|інстаграм|інста|ig)(?:\s*[:=-]\s*@?|\s+@)([a-zA-Z0-9_.]+)', text_lower)
+        # 4. Instagram prefix (instagram: @handle, insta: @handle)
+        ig_prefix_match = re.search(r'\b(?:instagram|insta|інстаграм|інста|ig)(?:\s*[:=-]\s*@?|\s+@)([a-zA-Z0-9_.]+)', text_lower)
         if ig_prefix_match:
             start, end = ig_prefix_match.span(1)
             results["instagram"] = text[start:end]
+
+    # 5. Bare @handle — only if no explicit Telegram or Instagram match was found
+    if "telegram" not in results:
+        at_matches = re.finditer(r'@([a-zA-Z0-9_]{5,32})', text)
+        for m in at_matches:
+            start_idx = m.start()
+            if start_idx == 0 or not text[start_idx-1].isalnum():
+                # Check if this @ is part of an Instagram context
+                prefix_text = text[:start_idx].lower()
+                if re.search(r'\b(?:instagram|insta|інстаграм|інста|ig)\s*[:=\-]?\s*$', prefix_text):
+                    continue
+                domain_text = text[m.end():m.end()+10]
+                if not re.match(r'^\.[a-zA-Z]{2,4}', domain_text):
+                    results["telegram"] = m.group(1)
+                    break
 
     return results
 

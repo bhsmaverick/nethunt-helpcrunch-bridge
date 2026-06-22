@@ -3,6 +3,7 @@ import json
 import os
 import sqlite3
 import re
+import asyncio
 import traceback
 from urllib.parse import urlparse, parse_qs
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Header, Depends, Response, Cookie
@@ -13,9 +14,9 @@ from pydantic import BaseModel
 from typing import Optional
 
 # Import local modules
-from .database import init_db, get_settings, save_settings, add_log, get_logs, get_metrics, get_db_connection, get_mirror_stats
+from .database import init_db, get_settings, save_settings, add_log, get_logs, get_metrics, get_db_connection, get_mirror_stats, find_hc_chats_by_customer_id
 from .services import nethunt, helpcrunch
-from .extractors import extract_email, extract_phone, extract_messengers, extract_params_from_url, detect_platform_from_url
+from .extractors import extract_email, extract_phone, extract_messengers, extract_params_from_url, detect_platform_from_url, build_chat_link
 from . import auth, sync_engine
 
 # Setup Logging
@@ -24,6 +25,11 @@ logger = logging.getLogger("bridge")
 
 # Create App
 app = FastAPI(title="BridgeHC - NetHunt & HelpCrunch Integration Hub")
+
+# Per-customer locks to prevent concurrent webhook processing from creating duplicates
+_customer_locks: dict = {}
+_customer_locks_guard = asyncio.Lock()
+_CUSTOMER_LOCKS_MAX = 500
 
 # CORS Middlewares
 app.add_middleware(
@@ -381,6 +387,18 @@ async def api_sync_stats(username: str = Depends(get_current_user)):
 
 # --- Webhook Synchronizer Business Logic ---
 
+async def _get_customer_lock(customer_id):
+    """Returns (or creates) an asyncio lock for a given customer_id."""
+    async with _customer_locks_guard:
+        # Cleanup: remove unlocked entries if dict is too large
+        if len(_customer_locks) > _CUSTOMER_LOCKS_MAX:
+            to_remove = [k for k, v in _customer_locks.items() if not v.locked()]
+            for k in to_remove:
+                del _customer_locks[k]
+        if customer_id not in _customer_locks:
+            _customer_locks[customer_id] = asyncio.Lock()
+        return _customer_locks[customer_id]
+
 async def _process_sync_task(
     event_type: str, 
     customer_data: dict, 
@@ -428,14 +446,37 @@ async def _process_sync_task(
     cust_country = location_data.get("countryCode") or ""
     cust_city = location_data.get("city") or ""
 
+    # For message events, fetch full customer profile from HelpCrunch API
+    # (webhook payload only contains basic id/name/email, no customData/phone/referer)
+    if event_type == "message.chat.customer" and hc_api_key and customer_id:
+        try:
+            full_profile = await helpcrunch.get_customer(hc_api_key, customer_id)
+            if full_profile and isinstance(full_profile, dict) and full_profile.get("id"):
+                logger.info(f"Fetched full HC customer profile for message event: {full_profile.get('name', '')}")
+                # Merge: only overwrite with non-None values from full_profile to avoid losing webhook data
+                for k, v in full_profile.items():
+                    if v is not None and v != "":
+                        customer_data[k] = v
+                cust_name = customer_data.get("name") or cust_name
+                cust_email = customer_data.get("email") or ""
+                cust_phone = customer_data.get("phone") or ""
+                cust_referer = customer_data.get("referer") or ""
+                cust_source = customer_data.get("source") or ""
+                location_data = customer_data.get("location", {}) or {}
+                cust_country = location_data.get("countryCode") or ""
+                cust_city = location_data.get("city") or ""
+        except Exception:
+            logger.exception(f"Failed to fetch full HC customer profile for customer {customer_id}:")
+
     # Normalize customer's initial phone number
     if cust_phone:
         normalized_initial_phone = extract_phone(cust_phone)
         if normalized_initial_phone:
             cust_phone = normalized_initial_phone
 
-    # Parse customData (for Telegram and UTM parameters)
+    # Parse customData (for Telegram, Instagram, and UTM parameters)
     telegram_handle = ""
+    instagram_handle = ""
     utm_source = ""
     utm_medium = ""
     utm_campaign = ""
@@ -452,6 +493,8 @@ async def _process_sync_task(
                     val = item.get("value") or ""
                     if prop == telegram_hc_key:
                         telegram_handle = val
+                    elif prop == "instagram":
+                        instagram_handle = val
                     elif prop == "utm_source":
                         utm_source = val
                     elif prop == "utm_medium":
@@ -466,6 +509,7 @@ async def _process_sync_task(
                         gclid = val
         elif isinstance(custom_data, dict):
             telegram_handle = custom_data.get(telegram_hc_key) or ""
+            instagram_handle = custom_data.get("instagram") or ""
             utm_source = custom_data.get("utm_source") or ""
             utm_medium = custom_data.get("utm_medium") or ""
             utm_campaign = custom_data.get("utm_campaign") or ""
@@ -494,9 +538,6 @@ async def _process_sync_task(
     # Referrer/Source Platform & Handle Detection from URLs
     detected_platform = detect_platform_from_url(cust_referer) or detect_platform_from_url(cust_source)
     
-    # Try to extract messenger handles directly from referer or source URL path
-    instagram_handle = ""
-    
     # Check if referer or source is Telegram link (t.me/handle)
     for url_str in [cust_source, cust_referer]:
         if url_str and "t.me/" in url_str.lower():
@@ -524,6 +565,19 @@ async def _process_sync_task(
                         break
             except Exception:
                 pass
+
+    # If platform detected from source/referer, set utm_medium accordingly if not already set
+    if not utm_medium and detected_platform:
+        if detected_platform == "Telegram":
+            utm_medium = "Telegram"
+        elif detected_platform == "Instagram":
+            utm_medium = "Instagram"
+        elif detected_platform == "Facebook":
+            utm_medium = "Facebook"
+
+    # Organic fallback: if no source, no referer, and no UTM, mark as organic
+    if not utm_source and not utm_medium and not cust_source and not cust_referer and not gclid:
+        utm_medium = "organic"
 
     # Extract info from message text if available
     extracted_email = None
@@ -576,35 +630,81 @@ async def _process_sync_task(
     if gclid_f and gclid: tracking_fields[gclid_f] = gclid
     if referer_f and cust_referer: tracking_fields[referer_f] = cust_referer
     if source_f:
-        # Save detected platform if available, otherwise fallback to URL
         tracking_fields[source_f] = detected_platform if detected_platform else (cust_source or "Organic/Direct")
     if country_f and cust_country: tracking_fields[country_f] = cust_country
     if city_f and cust_city: tracking_fields[city_f] = cust_city
 
-    # Sequentially look up contact in NetHunt
+    # Build chat URL if we have all the pieces (use build_chat_link for consistency)
+    chat_url = ""
+    if chat_id and hc_subdomain:
+        chat_url = build_chat_link(hc_subdomain, chat_id)
+
+    # STEP 1: Check local mirror — do we already have this user?
     contact = None
     search_method_used = ""
     
-    # STEP 0: Try the local mirror first (chat_link, phone, email, telegram, instagram)
-    try:
-        local_contact = await sync_engine.resolve_nh_contact(customer_data, chat_id)
-        if local_contact and local_contact.get("raw_json"):
-            contact = json.loads(local_contact["raw_json"])
-            search_method_used = "Local Mirror"
-            details_log.append(f"Matched existing NetHunt contact via local mirror: ID={local_contact.get('nh_record_id')}")
-    except Exception:
-        logger.exception("Local mirror contact resolution failed:")
-    
-    # STEP 1: Search by HelpCrunch ID if local mirror did not find a match
+    # 1a. Match by chat_link in local mirror (highest priority)
+    if chat_url:
+        try:
+            from .database import find_nh_contact_by_chat_link
+            local_contact = find_nh_contact_by_chat_link(chat_url)
+            if local_contact and local_contact.get("raw_json"):
+                contact = json.loads(local_contact["raw_json"])
+                search_method_used = "Local Mirror (chat_link)"
+                details_log.append(f"Matched existing NetHunt contact via local mirror chat_link: ID={local_contact.get('nh_record_id')}")
+        except Exception:
+            logger.exception("Local mirror chat_link lookup failed:")
+
+    # 1b. Check all user's chats in local mirror — for each chat with a chat_link, try to find the NH contact
+    if not contact and customer_id:
+        try:
+            from .database import find_nh_contact_by_chat_link
+            user_chats = find_hc_chats_by_customer_id(customer_id)
+            for uc in user_chats:
+                uc_chat_link = uc.get("chat_link") or ""
+                if uc_chat_link:
+                    local_contact = find_nh_contact_by_chat_link(uc_chat_link)
+                    if local_contact and local_contact.get("raw_json"):
+                        contact = json.loads(local_contact["raw_json"])
+                        search_method_used = "Local Mirror (user chat history)"
+                        details_log.append(f"Matched existing NetHunt contact via user's chat history (chat_link={uc_chat_link}): ID={local_contact.get('nh_record_id')}")
+                        break
+        except Exception:
+            logger.exception("Local mirror user chat history lookup failed:")
+
+    # 1c. Check if we know this HC customer — look at match_links table
+    if not contact and customer_id:
+        try:
+            from .database import find_match_by_hc_customer_id, get_nh_contact_by_id
+            match = find_match_by_hc_customer_id(customer_id)
+            if match:
+                local_contact = get_nh_contact_by_id(match["nh_contact_id"])
+                if local_contact and local_contact.get("raw_json"):
+                    contact = json.loads(local_contact["raw_json"])
+                    search_method_used = "Local Mirror (HC customer match)"
+                    details_log.append(f"Matched existing NetHunt contact via HC customer match: ID={local_contact.get('nh_record_id')}")
+        except Exception:
+            logger.exception("Local mirror HC customer match failed:")
+
+    # 1d. Field-based local mirror match (phone, email, telegram, instagram)
+    if not contact:
+        try:
+            local_contact = await sync_engine.resolve_nh_contact(customer_data, chat_id)
+            if local_contact and local_contact.get("raw_json"):
+                contact = json.loads(local_contact["raw_json"])
+                search_method_used = "Local Mirror (field match)"
+                details_log.append(f"Matched existing NetHunt contact via local mirror fields: ID={local_contact.get('nh_record_id')}")
+        except Exception:
+            logger.exception("Local mirror field-based resolution failed:")
+
+    # STEP 2: Search NetHunt API directly if local mirror didn't find a match
     if not contact and hc_id_nh_key and customer_id:
         details_log.append(f"Searching NetHunt by HelpCrunch ID: '{customer_id}' (Field: '{hc_id_nh_key}')...")
-        # Exact field query syntax: "Field Name":"value"
         query_str = f'"{hc_id_nh_key}":"{customer_id}"'
         contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, query_str)
         if contact:
             search_method_used = "HelpCrunch ID"
 
-    # Fallback to other priorities if not matched by ID
     if not contact:
         priorities = [p.strip() for p in priority_str.split(",") if p.strip()]
         for step in priorities:
@@ -630,11 +730,11 @@ async def _process_sync_task(
                     search_method_used = "Telegram"
                     break
 
+    # STEP 3: Find or create the NetHunt contact
     is_new_contact = False
     if not contact:
         details_log.append("No matching contact found in NetHunt CRM. Creating a new contact card...")
         
-        # Build payload fields for NetHunt create contact
         new_fields = {}
         if name_nh_key and cust_name:
             new_fields[name_nh_key] = cust_name
@@ -649,13 +749,12 @@ async def _process_sync_task(
         if merged_instagram and instagram_nh_key:
             new_fields[instagram_nh_key] = merged_instagram
             
-        # Append UTM tracking fields to create-record payload
         new_fields.update(tracking_fields)
             
-        # If chat link update is configured, append the link immediately in creation payload
-        if update_nh_link and chat_id and hc_subdomain:
-            chat_url = f"https://{hc_subdomain.strip()}.helpcrunch.com/inbox/chats/{chat_id}"
+        # Write chat link immediately in the creation payload — this is the FIRST thing we do
+        if update_nh_link and chat_url:
             new_fields[nh_link_field] = chat_url
+            details_log.append(f"Chat link '{chat_url}' will be written to field '{nh_link_field}' during contact creation.")
             
         created_contact, create_error = await nethunt.create_contact(nh_email, nh_key, nh_base, contacts_folder, new_fields)
         if created_contact:
@@ -672,11 +771,10 @@ async def _process_sync_task(
             add_log(event_type, cust_name, merged_email, merged_phone, "error", "\n".join(details_log), level="error")
             return
     else:
-        # Existing contact was matched -> Update their UTM parameters AND any missing fields
+        # Existing contact matched -> Update missing fields
         contact_id = contact.get("id")
         contact_fields = contact.get("fields", {})
         
-        # Check for missing contact details in NetHunt to update them
         update_fields = {}
         if customer_id and hc_id_nh_key and not contact_fields.get(hc_id_nh_key):
             update_fields[hc_id_nh_key] = str(customer_id)
@@ -694,7 +792,6 @@ async def _process_sync_task(
             update_fields[instagram_nh_key] = merged_instagram
             details_log.append(f"Adding missing Instagram handle to NetHunt contact: '{merged_instagram}'")
             
-        # Append tracking fields
         for k, v in tracking_fields.items():
             if not contact_fields.get(k):
                 update_fields[k] = v
@@ -709,24 +806,81 @@ async def _process_sync_task(
 
     contact_id = contact.get("id")
     contact_fields = contact.get("fields", {})
-    contact_name = contact.get("name") or contact_fields.get(name_nh_key) or contact_fields.get("Name") or cust_name
+    contact_name = contact.get("name") or sync_engine._first_value(contact_fields.get(name_nh_key)) or sync_engine._first_value(contact_fields.get("Name")) or cust_name
     details_log.append(f"Using NetHunt Contact: Name='{contact_name}', ID={contact_id} ({search_method_used})")
+
+    # STEP 4: Write chat link to NetHunt IMMEDIATELY (for existing contacts — new contacts already have it)
+    # This is done BEFORE deals/notes/bilateral sync to ensure the link is persisted as fast as possible
+    if update_nh_link and chat_url and not is_new_contact:
+        existing_link_raw = contact_fields.get(nh_link_field)
+        existing_link = sync_engine._first_value(existing_link_raw).strip() if existing_link_raw else ""
+        if existing_link != chat_url:
+            details_log.append(f"Writing Chat Link '{chat_url}' to NetHunt field '{nh_link_field}' (priority write)...")
+            nh_updated = await nethunt.update_contact_chat_link(nh_email, nh_key, nh_base, contact_id, nh_link_field, chat_url)
+            if nh_updated:
+                details_log.append("NetHunt CRM Contact updated with the HelpCrunch chat link.")
+            else:
+                details_log.append(f"Warning: Failed to update contact card field '{nh_link_field}' (ensure field exists in NetHunt Contacts folder).")
+        else:
+            details_log.append(f"Chat link already up-to-date in NetHunt field '{nh_link_field}'.")
+
+    # STEP 5: Update local mirror IMMEDIATELY after chat link is written
+    # This ensures future webhooks for the same chat can find the contact via chat_link
+    try:
+        await sync_engine.update_mirror_from_webhook(customer_data, chat_id, contact_id, contact)
+        details_log.append("Local mirror updated with chat link and customer data.")
+    except Exception:
+        logger.exception("Failed to update local mirror from webhook:")
 
     # Build Contact Card Link
     contact_url = f"{nh_base}/app/records/{contacts_folder}/{contact_id}"
     details_log.append(f"NetHunt Contact Card URL: {contact_url}")
 
-    # Bilateral Update: Update HelpCrunch customer profile with newly extracted/merged details if they were missing
+    # STEP 6: Bilateral Update — update HelpCrunch customer profile with extracted details
     hc_update_payload = {}
     if merged_email and not cust_email:
         hc_update_payload["email"] = merged_email
     if merged_phone and not cust_phone:
         hc_update_payload["phone"] = merged_phone
+
+    # Build customData update — preserve existing entries, only add/update new ones
+    custom_data_updates = []
     if merged_telegram and not telegram_handle:
-        # HelpCrunch requires customData updates as a list of property/value dicts
-        hc_update_payload["customData"] = [
-            {"property": telegram_hc_key, "value": merged_telegram}
-        ]
+        custom_data_updates.append({"property": telegram_hc_key, "value": merged_telegram})
+    if merged_instagram and not instagram_handle:
+        custom_data_updates.append({"property": "instagram", "value": merged_instagram})
+
+    if custom_data_updates:
+        # Merge with existing customData to avoid overwriting UTM/gclid/etc
+        existing_custom_data = customer_data.get("customData") or []
+        if isinstance(existing_custom_data, list):
+            # Copy to avoid mutating original customer_data
+            merged_cd = [dict(item) if isinstance(item, dict) else item for item in existing_custom_data]
+            existing_props = {item.get("property") for item in merged_cd if isinstance(item, dict)}
+            for update in custom_data_updates:
+                if update["property"] not in existing_props:
+                    merged_cd.append(update)
+                else:
+                    for item in merged_cd:
+                        if isinstance(item, dict) and item.get("property") == update["property"]:
+                            item["value"] = update["value"]
+                            break
+            hc_update_payload["customData"] = merged_cd
+        elif isinstance(existing_custom_data, dict):
+            # Convert dict format to list format for HC API compatibility
+            merged_cd = [{"property": k, "value": v} for k, v in existing_custom_data.items()]
+            existing_props = set(existing_custom_data.keys())
+            for update in custom_data_updates:
+                if update["property"] not in existing_props:
+                    merged_cd.append(update)
+                else:
+                    for item in merged_cd:
+                        if item["property"] == update["property"]:
+                            item["value"] = update["value"]
+                            break
+            hc_update_payload["customData"] = merged_cd
+        else:
+            hc_update_payload["customData"] = custom_data_updates
         
     if hc_update_payload:
         details_log.append(f"Bilateral sync: updating HelpCrunch customer profile {customer_id} with {list(hc_update_payload.keys())}...")
@@ -736,7 +890,7 @@ async def _process_sync_task(
         else:
             details_log.append("Warning: HelpCrunch customer profile update failed.")
 
-    # Fetch Deals
+    # STEP 7: Fetch Deals
     deals = []
     deals_text = "No deals associated."
     if deals_folder and not is_new_contact:
@@ -749,18 +903,16 @@ async def _process_sync_task(
                 d_id = deal.get("id")
                 d_name = deal.get("name") or "Untitled Deal"
                 
-                # Deduce Stage field
                 d_stage = "N/A"
                 for field_name in ["Stage", "Deal Stage", "Status", "Pipeline Stage", "pipelineStage"]:
                     if field_name in deal_fields:
-                        d_stage = str(deal_fields[field_name])
+                        d_stage = sync_engine._first_value(deal_fields[field_name])
                         break
                 
-                # Deduce Amount field
                 d_amount = ""
                 for field_name in ["Amount", "Deal Amount", "Value", "value", "Price"]:
                     if field_name in deal_fields:
-                        d_amount = f" - {deal_fields[field_name]}"
+                        d_amount = f" - {sync_engine._first_value(deal_fields[field_name])}"
                         break
                         
                 d_link = f"{nh_base}/app/records/{deals_folder}/{d_id}"
@@ -773,7 +925,7 @@ async def _process_sync_task(
     elif is_new_contact:
         deals_text = "- No deals found (newly created contact card) -"
 
-    # Format Note to HelpCrunch
+    # STEP 8: Write NetHunt lead link back to HelpCrunch notes
     card_prefix = "🟢 NetHunt Contact Card (NEW)" if is_new_contact else "🔴 NetHunt Contact Card"
     formatted_notes = (
         f"{card_prefix}: {contact_url}\n"
@@ -781,7 +933,6 @@ async def _process_sync_task(
         f"💼 Related Deals:\n{deals_text}"
     )
 
-    # 1. Update general customer notes in HelpCrunch
     details_log.append("Updating HelpCrunch customer notes...")
     notes_updated = await helpcrunch.update_customer_notes(hc_api_key, customer_id, formatted_notes)
     if notes_updated:
@@ -789,7 +940,7 @@ async def _process_sync_task(
     else:
         details_log.append("Warning: HelpCrunch customer notes update failed.")
 
-    # 2. Add private note in current chat window (if chat_id is present)
+    # Add private note in current chat window (if chat_id is present)
     if chat_id:
         chat_note = (
             f"🔗 **NetHunt Integration Hub**\n\n"
@@ -807,25 +958,9 @@ async def _process_sync_task(
         else:
             details_log.append("Warning: Could not add private note to the chat inbox.")
 
-    # 3. Optional Bidirectional Sync (Only if not already updated in creation payload)
-    if update_nh_link and chat_id and hc_subdomain and not is_new_contact:
-        chat_url = f"https://{hc_subdomain.strip()}.helpcrunch.com/inbox/chats/{chat_id}"
-        details_log.append(f"Bidirectional Sync: Writing Chat Link '{chat_url}' to NetHunt field '{nh_link_field}'...")
-        nh_updated = await nethunt.update_contact_chat_link(nh_email, nh_key, nh_base, contact_id, nh_link_field, chat_url)
-        if nh_updated:
-            details_log.append("NetHunt CRM Contact updated with the HelpCrunch chat link.")
-        else:
-            details_log.append(f"Warning: Failed to update contact card field '{nh_link_field}' (ensure field exists in NetHunt Contacts folder).")
-
     log_level = "warning" if any("Warning:" in d for d in details_log) else "info"
     add_log(event_type, cust_name, merged_email, merged_phone, "success", "\n".join(details_log), level=log_level)
     logger.info(f"Sync task completed successfully for customer {cust_name}")
-
-    # Update local mirror after successful processing so future chats can resolve faster
-    try:
-        await sync_engine.update_mirror_from_webhook(customer_data, chat_id, contact_id)
-    except Exception:
-        logger.exception("Failed to update local mirror from webhook:")
 
 async def process_sync_task(
     event_type: str,
@@ -833,12 +968,19 @@ async def process_sync_task(
     chat_id: Optional[int] = None,
     message_text: Optional[str] = None
 ):
-    """Wrapper around _process_sync_task that catches unhandled exceptions and logs them."""
+    """Wrapper around _process_sync_task with per-customer locking and exception handling."""
     customer_name = customer_data.get("name") or "Unknown Customer"
     customer_email = customer_data.get("email") or ""
     customer_phone = customer_data.get("phone") or ""
+    customer_id = customer_data.get("id")
     try:
-        await _process_sync_task(event_type, customer_data, chat_id, message_text)
+        # Acquire per-customer lock to prevent concurrent duplicate creation
+        if customer_id:
+            lock = await _get_customer_lock(customer_id)
+            async with lock:
+                await _process_sync_task(event_type, customer_data, chat_id, message_text)
+        else:
+            await _process_sync_task(event_type, customer_data, chat_id, message_text)
     except Exception as e:
         logger.exception("Unhandled error during sync task:")
         error_details = f"Unhandled exception: {e}\n{traceback.format_exc()}"
@@ -881,12 +1023,12 @@ async def webhook_handler(
     message_text = None
     if event == "chat.new":
         customer_data = event_data.get("customer") or {}
-        chat_id = event_data.get("id")
+        chat_id = event_data.get("chat_id") or event_data.get("id")
     elif event == "customer.new":
         customer_data = event_data
     elif event == "message.chat.customer":
         customer_data = event_data.get("customer") or {}
-        chat_id = event_data.get("chat", {}).get("id") if isinstance(event_data.get("chat"), dict) else event_data.get("chat")
+        chat_id = event_data.get("chat_id")
         message_text = event_data.get("message", {}).get("text")
     else:
         return {"status": "ignored", "reason": f"Unhandled event type: {event}"}

@@ -381,6 +381,14 @@ def get_hc_chat_by_id(hc_chat_id):
     conn.close()
     return dict(row) if row else None
 
+def find_hc_chats_by_customer_id(hc_customer_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM hc_chats WHERE hc_customer_id = ? ORDER BY updated_at DESC", (hc_customer_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows] if rows else []
+
 def get_nh_contact_by_id(nh_contact_id):
     conn = get_db_connection()
     cursor = conn.cursor()
