@@ -439,6 +439,11 @@ async def _process_sync_task(
     city_f = settings.get("city_field_nh", "City")
 
     customer_id = customer_data.get("id")
+    if customer_id is not None:
+        try:
+            customer_id = int(customer_id)
+        except (ValueError, TypeError):
+            pass
     cust_name = customer_data.get("name") or "Unknown Customer"
     cust_email = customer_data.get("email") or ""
     cust_phone = customer_data.get("phone") or ""
@@ -1102,6 +1107,13 @@ async def webhook_handler(
         message_text = event_data.get("message", {}).get("text")
     else:
         return {"status": "ignored", "reason": f"Unhandled event type: {event}"}
+
+    # Ensure chat_id is int for HelpCrunch API
+    if chat_id is not None:
+        try:
+            chat_id = int(chat_id)
+        except (ValueError, TypeError):
+            pass
         
     if not customer_data or not customer_data.get("id"):
         return {"status": "ignored", "reason": "No customer ID found in payload."}
