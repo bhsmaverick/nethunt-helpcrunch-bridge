@@ -55,15 +55,30 @@ def init_db():
         customer_phone TEXT,
         status TEXT,
         level TEXT,
-        details TEXT
+        details TEXT,
+        hc_customer_id TEXT
     )
     """)
-    # Migrate existing logs tables that were created without the level column
+    # Migrate existing logs tables that were created without the level or hc_customer_id column
     cursor.execute("PRAGMA table_info(logs)")
     existing_columns = [row[1] for row in cursor.fetchall()]
     if "level" not in existing_columns:
         cursor.execute("ALTER TABLE logs ADD COLUMN level TEXT")
         cursor.execute("UPDATE logs SET level = CASE status WHEN 'error' THEN 'error' WHEN 'success' THEN 'info' ELSE 'info' END")
+    if "hc_customer_id" not in existing_columns:
+        cursor.execute("ALTER TABLE logs ADD COLUMN hc_customer_id TEXT")
+
+    # Sync counters table (persists across log cleanup)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS sync_counters (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        total_syncs INTEGER DEFAULT 0,
+        matched_syncs INTEGER DEFAULT 0,
+        unmatched_syncs INTEGER DEFAULT 0,
+        errors INTEGER DEFAULT 0
+    )
+    """)
+    cursor.execute("INSERT OR IGNORE INTO sync_counters (id, total_syncs, matched_syncs, unmatched_syncs, errors) VALUES (1, 0, 0, 0, 0)")
 
     
     # Mirror: HelpCrunch customers
@@ -151,7 +166,8 @@ def init_db():
         "nethunt_api_key": "",
         "nethunt_contacts_folder": "",
         "nethunt_deals_folder": "",
-        "nethunt_base_url": "https://nethunt.co",
+        "nethunt_base_url": "https://nethunt.com",
+        "nethunt_workspace_id": "",
         "sync_priority": "email,phone,telegram",
         "telegram_field_hc": "telegram",  # customData key
         "telegram_field_nh": "Telegram",   # NetHunt CRM field name
@@ -202,19 +218,43 @@ def save_settings(settings_dict):
     conn.close()
     return get_settings()
 
-def add_log(event_type, customer_name, customer_email, customer_phone, status, details, level="info"):
-    """Appends an event to the activity log and retains only the last 1000 items."""
+def add_log(event_type, customer_name, customer_email, customer_phone, status, details, level="info", hc_customer_id=None):
+    """Upserts an event log per customer (one row per hc_customer_id) and increments sync counters."""
     conn = get_db_connection()
     cursor = conn.cursor()
     timestamp = datetime.now().isoformat()
-    cursor.execute(
-        "INSERT INTO logs (timestamp, event_type, customer_name, customer_email, customer_phone, status, level, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (timestamp, event_type, customer_name, customer_email, customer_phone, status, level, details)
-    )
-    
+
+    if hc_customer_id:
+        cursor.execute("SELECT id FROM logs WHERE hc_customer_id = ? ORDER BY id DESC LIMIT 1", (str(hc_customer_id),))
+        existing = cursor.fetchone()
+        if existing:
+            cursor.execute(
+                "UPDATE logs SET timestamp=?, event_type=?, customer_name=?, customer_email=?, customer_phone=?, status=?, level=?, details=? WHERE id=?",
+                (timestamp, event_type, customer_name, customer_email, customer_phone, status, level, details, existing[0])
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO logs (timestamp, event_type, customer_name, customer_email, customer_phone, status, level, details, hc_customer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (timestamp, event_type, customer_name, customer_email, customer_phone, status, level, details, str(hc_customer_id))
+            )
+    else:
+        cursor.execute(
+            "INSERT INTO logs (timestamp, event_type, customer_name, customer_email, customer_phone, status, level, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (timestamp, event_type, customer_name, customer_email, customer_phone, status, level, details)
+        )
+
+    # Increment sync counters
+    cursor.execute("UPDATE sync_counters SET total_syncs = total_syncs + 1")
+    if status == 'success':
+        cursor.execute("UPDATE sync_counters SET matched_syncs = matched_syncs + 1")
+    elif status == 'no_match':
+        cursor.execute("UPDATE sync_counters SET unmatched_syncs = unmatched_syncs + 1")
+    elif status == 'error':
+        cursor.execute("UPDATE sync_counters SET errors = errors + 1")
+
     # Keep only last 1000 logs to prevent unbounded DB growth
     cursor.execute("DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 1000)")
-    
+
     conn.commit()
     conn.close()
 
@@ -239,28 +279,23 @@ def get_logs(limit=100, status_filter=None):
     return [dict(row) for row in rows]
 
 def get_metrics():
-    """Retrieves sync metrics for the dashboard."""
+    """Retrieves sync metrics from persistent counters."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    cursor.execute("SELECT COUNT(*) FROM logs")
-    total_syncs = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM logs WHERE status='success'")
-    matched_syncs = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM logs WHERE status='no_match'")
-    unmatched_syncs = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM logs WHERE status='error'")
-    errors = cursor.fetchone()[0]
-    
+
+    cursor.execute("SELECT total_syncs, matched_syncs, unmatched_syncs, errors FROM sync_counters WHERE id = 1")
+    row = cursor.fetchone()
+    if row:
+        total_syncs, matched_syncs, unmatched_syncs, errors = row
+    else:
+        total_syncs = matched_syncs = unmatched_syncs = errors = 0
+
     conn.close()
-    
+
     match_rate = 0.0
     if total_syncs > 0:
         match_rate = round((matched_syncs / total_syncs) * 100, 1)
-        
+
     return {
         "total_syncs": total_syncs,
         "matched_syncs": matched_syncs,

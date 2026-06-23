@@ -39,6 +39,7 @@ const hcWebhookSecretInput = document.getElementById('hc-webhook-secret');
 const nhApiEmailInput = document.getElementById('nh-api-email');
 const nhApiKeyInput = document.getElementById('nh-api-key');
 const nhBaseUrlInput = document.getElementById('nh-base-url');
+const nhWorkspaceIdInput = document.getElementById('nh-workspace-id');
 const nhFolderContactsSelect = document.getElementById('nh-folder-contacts');
 const nhFolderDealsSelect = document.getElementById('nh-folder-deals');
 const syncPriorityInput = document.getElementById('sync-priority');
@@ -385,7 +386,8 @@ async function loadSettings() {
         hcWebhookSecretInput.value = settings.helpcrunch_webhook_secret || '';
         nhApiEmailInput.value = settings.nethunt_api_email || '';
         nhApiKeyInput.value = settings.nethunt_api_key || '';
-        nhBaseUrlInput.value = settings.nethunt_base_url || 'https://nethunt.co';
+        nhBaseUrlInput.value = settings.nethunt_base_url || 'https://nethunt.com';
+        nhWorkspaceIdInput.value = settings.nethunt_workspace_id || '';
         syncPriorityInput.value = settings.sync_priority || 'email,phone,telegram';
         fieldTgHcInput.value = settings.telegram_field_hc || 'telegram';
         fieldNameNhInput.value = settings.name_field_nh || 'Name';
@@ -718,6 +720,7 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
         nethunt_contacts_folder: nhFolderContactsSelect.value,
         nethunt_deals_folder: nhFolderDealsSelect.value,
         nethunt_base_url: nhBaseUrlInput.value.trim(),
+        nethunt_workspace_id: nhWorkspaceIdInput.value.trim(),
         sync_priority: syncPriorityInput.value.trim(),
         telegram_field_hc: fieldTgHcInput.value.trim(),
         telegram_field_nh: fieldTgNhInput.value.trim(),

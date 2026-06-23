@@ -16,7 +16,7 @@ from typing import Optional
 # Import local modules
 from .database import init_db, get_settings, save_settings, add_log, get_logs, get_metrics, get_db_connection, get_mirror_stats, find_hc_chats_by_customer_id
 from .services import nethunt, helpcrunch
-from .extractors import extract_email, extract_phone, extract_messengers, extract_params_from_url, detect_platform_from_url, build_chat_link
+from .extractors import extract_email, extract_phone, extract_messengers, extract_params_from_url, detect_platform_from_url, build_chat_link, build_nethunt_record_url
 from . import auth, sync_engine
 
 # Setup Logging
@@ -409,7 +409,8 @@ async def _process_sync_task(
     hc_api_key = settings.get("helpcrunch_api_key")
     nh_email = settings.get("nethunt_api_email")
     nh_key = settings.get("nethunt_api_key")
-    nh_base = settings.get("nethunt_base_url", "https://nethunt.co")
+    nh_base = settings.get("nethunt_base_url", "https://nethunt.com")
+    nh_workspace_id = settings.get("nethunt_workspace_id", "")
     contacts_folder = settings.get("nethunt_contacts_folder")
     deals_folder = settings.get("nethunt_deals_folder")
     priority_str = settings.get("sync_priority", "email,phone,telegram")
@@ -616,7 +617,7 @@ async def _process_sync_task(
     if not hc_api_key or not nh_email or not nh_key or not contacts_folder:
         err_msg = "Aborted: Credentials or folder mapping missing in Settings."
         details_log.append(err_msg)
-        add_log(event_type, cust_name, merged_email, merged_phone, "error", "\n".join(details_log), level="error")
+        add_log(event_type, cust_name, merged_email, merged_phone, "error", "\n".join(details_log), level="error", hc_customer_id=customer_id)
         logger.error(err_msg)
         return
 
@@ -768,7 +769,7 @@ async def _process_sync_task(
             details_log.append("Failed to create new NetHunt contact card. Aborting.")
             if create_error:
                 details_log.append(f"API error: {create_error}")
-            add_log(event_type, cust_name, merged_email, merged_phone, "error", "\n".join(details_log), level="error")
+            add_log(event_type, cust_name, merged_email, merged_phone, "error", "\n".join(details_log), level="error", hc_customer_id=customer_id)
             return
     else:
         # Existing contact matched -> Update missing fields
@@ -833,14 +834,14 @@ async def _process_sync_task(
         logger.exception("Failed to update local mirror from webhook:")
 
     # Build Contact Card Link
-    contact_url = f"{nh_base}/app/records/{contacts_folder}/{contact_id}"
+    contact_url = build_nethunt_record_url(nh_base, nh_workspace_id, contacts_folder, contact_id)
     details_log.append(f"NetHunt Contact Card URL: {contact_url}")
 
     # STEP 6: Bilateral Update — update HelpCrunch customer profile with extracted details
     hc_update_payload = {}
-    if merged_email and not cust_email:
+    if merged_email and (not cust_email or extracted_email):
         hc_update_payload["email"] = merged_email
-    if merged_phone and not cust_phone:
+    if merged_phone and (not cust_phone or extracted_phone):
         hc_update_payload["phone"] = merged_phone
 
     # Build customData update — preserve existing entries, only add/update new ones
@@ -915,7 +916,7 @@ async def _process_sync_task(
                         d_amount = f" - {sync_engine._first_value(deal_fields[field_name])}"
                         break
                         
-                d_link = f"{nh_base}/app/records/{deals_folder}/{d_id}"
+                d_link = build_nethunt_record_url(nh_base, nh_workspace_id, deals_folder, d_id)
                 deals.append(f"- {d_name}: Stage={d_stage}{d_amount} (Link: {d_link})")
                 
             deals_text = "\n".join(deals)
@@ -959,7 +960,7 @@ async def _process_sync_task(
             details_log.append("Warning: Could not add private note to the chat inbox.")
 
     log_level = "warning" if any("Warning:" in d for d in details_log) else "info"
-    add_log(event_type, cust_name, merged_email, merged_phone, "success", "\n".join(details_log), level=log_level)
+    add_log(event_type, cust_name, merged_email, merged_phone, "success", "\n".join(details_log), level=log_level, hc_customer_id=customer_id)
     logger.info(f"Sync task completed successfully for customer {cust_name}")
 
 async def process_sync_task(
@@ -984,7 +985,7 @@ async def process_sync_task(
     except Exception as e:
         logger.exception("Unhandled error during sync task:")
         error_details = f"Unhandled exception: {e}\n{traceback.format_exc()}"
-        add_log(event_type, customer_name, customer_email, customer_phone, "error", error_details, level="error")
+        add_log(event_type, customer_name, customer_email, customer_phone, "error", error_details, level="error", hc_customer_id=customer_id)
         logger.error(f"Sync task failed for customer {customer_name}: {e}")
 
 # Webhook Handler Endpoint (NOT protected - verified via HMAC)
@@ -1003,7 +1004,7 @@ async def webhook_handler(
     # Verification
     if webhook_secret and not helpcrunch.verify_signature(raw_body, x_helpcrunch_signature, webhook_secret):
         logger.warning("Rejected HelpCrunch webhook: Signature mismatch.")
-        add_log("webhook_rejected", "Unknown", "", "", "error", "Invalid signature in X-HelpCrunch-Signature header.", level="error")
+        add_log("webhook_rejected", "Unknown", "", "", "error", "Invalid signature in X-HelpCrunch-Signature header.", level="error", hc_customer_id=None)
         raise HTTPException(status_code=401, detail="Invalid signature header.")
         
     try:
