@@ -1004,11 +1004,11 @@ async def _process_sync_task(
     )
 
     details_log.append("Updating HelpCrunch customer notes...")
-    notes_updated = await helpcrunch.update_customer_notes(hc_api_key, customer_id, formatted_notes)
+    notes_updated, notes_error = await helpcrunch.update_customer_notes(hc_api_key, customer_id, formatted_notes)
     if notes_updated:
         details_log.append("Customer notes updated successfully in HelpCrunch.")
     else:
-        details_log.append("Warning: HelpCrunch customer notes update failed.")
+        details_log.append(f"Warning: HelpCrunch customer notes update failed. {notes_error}")
 
     # Add private note in current chat window (if chat_id is present)
     if chat_id:
@@ -1022,11 +1022,11 @@ async def _process_sync_task(
             f"Active Deals:\n{deals_text if deals else '- No deals found -'}"
         )
         details_log.append(f"Adding private note to chat ID {chat_id}...")
-        private_note_added = await helpcrunch.add_private_note(hc_api_key, chat_id, chat_note)
+        private_note_added, note_error = await helpcrunch.add_private_note(hc_api_key, chat_id, chat_note)
         if private_note_added:
             details_log.append("Private note added to the chat inbox.")
         else:
-            details_log.append("Warning: Could not add private note to the chat inbox.")
+            details_log.append(f"Warning: Could not add private note to the chat inbox. {note_error}")
 
     log_level = "warning" if any("Warning:" in d for d in details_log) else "info"
     add_log(event_type, contact_name, merged_email, merged_phone, "success", "\n".join(details_log), level=log_level, hc_customer_id=customer_id)

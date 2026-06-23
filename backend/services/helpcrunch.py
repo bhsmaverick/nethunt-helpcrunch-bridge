@@ -45,8 +45,8 @@ async def get_customer(api_key: str, customer_id: int) -> dict:
         logger.exception(f"HelpCrunch get customer error for {customer_id}:")
         return {}
 
-async def update_customer_notes(api_key: str, customer_id: int, notes: str) -> bool:
-    """Updates the customer's notes in HelpCrunch."""
+async def update_customer_notes(api_key: str, customer_id: int, notes: str) -> tuple:
+    """Updates the customer's notes in HelpCrunch. Returns (success, error_detail)."""
     url = f"https://api.helpcrunch.com/v1/customers/{customer_id}"
     headers = _get_headers(api_key)
     payload = {"notes": notes}
@@ -55,15 +55,17 @@ async def update_customer_notes(api_key: str, customer_id: int, notes: str) -> b
         async with httpx.AsyncClient() as client:
             response = await client.put(url, headers=headers, json=payload, timeout=10.0)
             if response.status_code in (200, 201):
-                return True
-            logger.warning(f"Failed to update HelpCrunch customer notes for {customer_id}: Status {response.status_code}, Body {response.text}")
-            return False
+                return True, None
+            error_detail = f"Status {response.status_code}, Body {response.text}"
+            logger.warning(f"Failed to update HelpCrunch customer notes for {customer_id}: {error_detail}")
+            return False, error_detail
     except Exception as e:
+        error_detail = str(e)
         logger.exception(f"HelpCrunch update customer notes error for {customer_id}:")
-        return False
+        return False, error_detail
 
-async def add_private_note(api_key: str, chat_id: int, text: str) -> bool:
-    """Adds a private note to a chat conversation in HelpCrunch."""
+async def add_private_note(api_key: str, chat_id: int, text: str) -> tuple:
+    """Adds a private note to a chat conversation in HelpCrunch. Returns (success, error_detail)."""
     url = "https://api.helpcrunch.com/v1/messages"
     headers = _get_headers(api_key)
     payload = {
@@ -76,12 +78,14 @@ async def add_private_note(api_key: str, chat_id: int, text: str) -> bool:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, headers=headers, json=payload, timeout=10.0)
             if response.status_code in (200, 201):
-                return True
-            logger.warning(f"Failed to add HelpCrunch private note: Status {response.status_code}, Body {response.text}")
-            return False
+                return True, None
+            error_detail = f"Status {response.status_code}, Body {response.text}"
+            logger.warning(f"Failed to add HelpCrunch private note: {error_detail}")
+            return False, error_detail
     except Exception as e:
+        error_detail = str(e)
         logger.exception(f"HelpCrunch add private note error in chat {chat_id}:")
-        return False
+        return False, error_detail
 
 def verify_signature(raw_body: bytes, signature: str, secret: str) -> bool:
     """
