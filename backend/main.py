@@ -907,8 +907,9 @@ async def _process_sync_task(
     except Exception:
         logger.exception("Failed to update local mirror from webhook:")
 
-    # Build Contact Card Link
+    # Build Contact Card Link (full base64 URL for customData + short URL for notes)
     contact_url = build_nethunt_record_url(nh_base, nh_workspace_id, contacts_folder, contact_id)
+    short_contact_url = f"{nh_base}/app/records/{contacts_folder}/{contact_id}"
     details_log.append(f"NetHunt Contact Card URL: {contact_url}")
 
     # STEP 6: Bilateral Update — update HelpCrunch customer profile with extracted details
@@ -924,6 +925,8 @@ async def _process_sync_task(
         custom_data_updates.append({"property": telegram_hc_key, "value": merged_telegram})
     if merged_instagram and not instagram_handle:
         custom_data_updates.append({"property": "instagram", "value": merged_instagram})
+    # Always add NetHunt contact URL to customData (no 255 char limit there)
+    custom_data_updates.append({"property": "nethunt_contact_url", "value": contact_url})
 
     if custom_data_updates:
         # Merge with existing customData to avoid overwriting UTM/gclid/etc
@@ -1001,8 +1004,9 @@ async def _process_sync_task(
         deals_text = "- No deals found (newly created contact card) -"
 
     # STEP 8: Write NetHunt lead link back to HelpCrunch notes (max 255 chars)
+    # Use short URL format for notes; full URL is in customData
     card_prefix = "🟢 NEW" if is_new_contact else "🔴"
-    formatted_notes = f"{card_prefix} NetHunt: {contact_name} | {contact_url}"
+    formatted_notes = f"{card_prefix} NetHunt: {contact_name} | {short_contact_url}"
     if len(formatted_notes) > 255:
         formatted_notes = formatted_notes[:252] + "..."
 
