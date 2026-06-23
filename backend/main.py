@@ -89,7 +89,8 @@ class SettingsUpdate(BaseModel):
     nethunt_api_key: str
     nethunt_contacts_folder: Optional[str] = ""
     nethunt_deals_folder: Optional[str] = ""
-    nethunt_base_url: Optional[str] = "https://nethunt.co"
+    nethunt_base_url: Optional[str] = "https://nethunt.com"
+    nethunt_workspace_id: Optional[str] = ""
     sync_priority: Optional[str] = "email,phone,telegram"
     telegram_field_hc: Optional[str] = "telegram"
     telegram_field_nh: Optional[str] = "Telegram"
@@ -114,12 +115,12 @@ class SettingsUpdate(BaseModel):
 class TestConnectionRequest(BaseModel):
     email: Optional[str] = ""
     key: str
-    base_url: Optional[str] = "https://nethunt.co"
+    base_url: Optional[str] = "https://nethunt.com"
 
 class FolderFieldsRequest(BaseModel):
     email: str
     key: str
-    base_url: Optional[str] = "https://nethunt.co"
+    base_url: Optional[str] = "https://nethunt.com"
     folder_id: str
 
 class SimulateWebhookRequest(BaseModel):
@@ -772,38 +773,106 @@ async def _process_sync_task(
             add_log(event_type, cust_name, merged_email, merged_phone, "error", "\n".join(details_log), level="error", hc_customer_id=customer_id)
             return
     else:
-        # Existing contact matched -> Update missing fields
+        # Existing contact matched -> Update missing or append new values
         contact_id = contact.get("id")
         contact_fields = contact.get("fields", {})
-        
-        update_fields = {}
+
+        # Helper: get all existing values from a NetHunt field (handles list and scalar)
+        def _existing_values(field_key):
+            raw = contact_fields.get(field_key)
+            if not raw:
+                return []
+            if isinstance(raw, list):
+                return [str(v).strip().lower() for v in raw if v]
+            return [str(raw).strip().lower()]
+
+        # Helper: check if a new value already exists in field
+        def _value_exists(field_key, new_val):
+            return str(new_val).strip().lower() in _existing_values(field_key)
+
+        # Fields to overwrite (for missing fields) and fields to append (for existing fields with new values)
+        overwrite_fields = {}
+        append_fields = {}
+        notes_additions = []
+
         if customer_id and hc_id_nh_key and not contact_fields.get(hc_id_nh_key):
-            update_fields[hc_id_nh_key] = str(customer_id)
+            overwrite_fields[hc_id_nh_key] = str(customer_id)
             details_log.append(f"Linking HelpCrunch ID to NetHunt contact: '{customer_id}'")
-        if merged_email and email_nh_key and not contact_fields.get(email_nh_key):
-            update_fields[email_nh_key] = [merged_email]
-            details_log.append(f"Adding missing Email to NetHunt contact: '{merged_email}'")
-        if merged_phone and phone_nh_key and not contact_fields.get(phone_nh_key):
-            update_fields[phone_nh_key] = [merged_phone]
-            details_log.append(f"Adding missing Phone to NetHunt contact: '{merged_phone}'")
-        if merged_telegram and telegram_nh_key and not contact_fields.get(telegram_nh_key):
-            update_fields[telegram_nh_key] = merged_telegram
-            details_log.append(f"Adding missing Telegram handle to NetHunt contact: '{merged_telegram}'")
-        if merged_instagram and instagram_nh_key and not contact_fields.get(instagram_nh_key):
-            update_fields[instagram_nh_key] = merged_instagram
-            details_log.append(f"Adding missing Instagram handle to NetHunt contact: '{merged_instagram}'")
-            
+
+        # Email: if field empty -> overwrite; if has value and new is different -> append
+        if merged_email and email_nh_key:
+            if not contact_fields.get(email_nh_key):
+                overwrite_fields[email_nh_key] = [merged_email]
+                details_log.append(f"Adding missing Email to NetHunt contact: '{merged_email}'")
+            elif not _value_exists(email_nh_key, merged_email):
+                append_fields[email_nh_key] = [merged_email]
+                details_log.append(f"Appending new Email to NetHunt contact: '{merged_email}'")
+
+        # Phone: same logic
+        if merged_phone and phone_nh_key:
+            if not contact_fields.get(phone_nh_key):
+                overwrite_fields[phone_nh_key] = [merged_phone]
+                details_log.append(f"Adding missing Phone to NetHunt contact: '{merged_phone}'")
+            elif not _value_exists(phone_nh_key, merged_phone):
+                append_fields[phone_nh_key] = [merged_phone]
+                details_log.append(f"Appending new Phone to NetHunt contact: '{merged_phone}'")
+
+        # Telegram: same logic
+        if merged_telegram and telegram_nh_key:
+            if not contact_fields.get(telegram_nh_key):
+                overwrite_fields[telegram_nh_key] = merged_telegram
+                details_log.append(f"Adding missing Telegram handle to NetHunt contact: '{merged_telegram}'")
+            elif not _value_exists(telegram_nh_key, merged_telegram):
+                append_fields[telegram_nh_key] = merged_telegram
+                details_log.append(f"Appending new Telegram handle to NetHunt contact: '{merged_telegram}'")
+
+        # Instagram: same logic
+        if merged_instagram and instagram_nh_key:
+            if not contact_fields.get(instagram_nh_key):
+                overwrite_fields[instagram_nh_key] = merged_instagram
+                details_log.append(f"Adding missing Instagram handle to NetHunt contact: '{merged_instagram}'")
+            elif not _value_exists(instagram_nh_key, merged_instagram):
+                append_fields[instagram_nh_key] = merged_instagram
+                details_log.append(f"Appending new Instagram handle to NetHunt contact: '{merged_instagram}'")
+
+        # Tracking fields: only fill if missing
         for k, v in tracking_fields.items():
             if not contact_fields.get(k):
-                update_fields[k] = v
-                
-        if update_fields:
-            details_log.append(f"Updating NetHunt CRM contact fields: {list(update_fields.keys())}...")
-            updated = await nethunt.update_contact(nh_email, nh_key, nh_base, contact_id, update_fields)
+                overwrite_fields[k] = v
+
+        # Step 1: Overwrite missing fields
+        if overwrite_fields:
+            details_log.append(f"Updating NetHunt CRM contact fields (overwrite): {list(overwrite_fields.keys())}...")
+            updated = await nethunt.update_contact(nh_email, nh_key, nh_base, contact_id, overwrite_fields, overwrite=True)
             if updated:
                 details_log.append("NetHunt contact updated successfully.")
             else:
                 details_log.append("Warning: Could not update NetHunt contact fields.")
+
+        # Step 2: Append new values to existing fields (overwrite=False to add to multi-value)
+        if append_fields:
+            details_log.append(f"Appending to NetHunt CRM contact fields: {list(append_fields.keys())}...")
+            appended = await nethunt.update_contact(nh_email, nh_key, nh_base, contact_id, append_fields, overwrite=False)
+            if appended:
+                details_log.append("New values appended to NetHunt contact successfully.")
+            else:
+                # Fallback: write to notes field since append failed (field doesn't support multi-value)
+                details_log.append("Append failed (field may not support multi-value). Writing to notes instead.")
+                for k, v in append_fields.items():
+                    if isinstance(v, list):
+                        notes_additions.append(f"{k}: {', '.join(v)}")
+                    else:
+                        notes_additions.append(f"{k}: {v}")
+
+        # Step 3: If we have notes additions, write them to a notes field in NetHunt
+        if notes_additions:
+            notes_text = " | ".join(notes_additions)
+            notes_field_key = settings.get("nethunt_notes_field_nh", "Additional Info")
+            notes_updated = await nethunt.update_contact(nh_email, nh_key, nh_base, contact_id, {notes_field_key: notes_text}, overwrite=False)
+            if notes_updated:
+                details_log.append(f"Additional info written to NetHunt field '{notes_field_key}'.")
+            else:
+                details_log.append(f"Warning: Could not write additional info to NetHunt field '{notes_field_key}'.")
 
     contact_id = contact.get("id")
     contact_fields = contact.get("fields", {})
@@ -960,7 +1029,7 @@ async def _process_sync_task(
             details_log.append("Warning: Could not add private note to the chat inbox.")
 
     log_level = "warning" if any("Warning:" in d for d in details_log) else "info"
-    add_log(event_type, cust_name, merged_email, merged_phone, "success", "\n".join(details_log), level=log_level, hc_customer_id=customer_id)
+    add_log(event_type, contact_name, merged_email, merged_phone, "success", "\n".join(details_log), level=log_level, hc_customer_id=customer_id)
     logger.info(f"Sync task completed successfully for customer {cust_name}")
 
 async def process_sync_task(

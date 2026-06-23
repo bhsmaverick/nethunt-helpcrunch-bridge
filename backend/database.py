@@ -219,18 +219,25 @@ def save_settings(settings_dict):
     return get_settings()
 
 def add_log(event_type, customer_name, customer_email, customer_phone, status, details, level="info", hc_customer_id=None):
-    """Upserts an event log per customer (one row per hc_customer_id) and increments sync counters."""
+    """Upserts an event log per customer (one row per hc_customer_id) and increments sync counters only on new entries."""
     conn = get_db_connection()
     cursor = conn.cursor()
     timestamp = datetime.now().isoformat()
+    is_new_log = True
 
     if hc_customer_id:
-        cursor.execute("SELECT id FROM logs WHERE hc_customer_id = ? ORDER BY id DESC LIMIT 1", (str(hc_customer_id),))
+        cursor.execute("SELECT id, customer_name, customer_email, customer_phone FROM logs WHERE hc_customer_id = ? ORDER BY id DESC LIMIT 1", (str(hc_customer_id),))
         existing = cursor.fetchone()
         if existing:
+            is_new_log = False
+            existing_id, existing_name, existing_email, existing_phone = existing
+            # Merge: only overwrite with non-empty new values; keep existing if new is empty
+            final_name = customer_name if customer_name and customer_name != "Unknown Customer" else (existing_name or customer_name)
+            final_email = customer_email if customer_email else (existing_email or "")
+            final_phone = customer_phone if customer_phone else (existing_phone or "")
             cursor.execute(
                 "UPDATE logs SET timestamp=?, event_type=?, customer_name=?, customer_email=?, customer_phone=?, status=?, level=?, details=? WHERE id=?",
-                (timestamp, event_type, customer_name, customer_email, customer_phone, status, level, details, existing[0])
+                (timestamp, event_type, final_name, final_email, final_phone, status, level, details, existing_id)
             )
         else:
             cursor.execute(
@@ -243,14 +250,15 @@ def add_log(event_type, customer_name, customer_email, customer_phone, status, d
             (timestamp, event_type, customer_name, customer_email, customer_phone, status, level, details)
         )
 
-    # Increment sync counters
-    cursor.execute("UPDATE sync_counters SET total_syncs = total_syncs + 1")
-    if status == 'success':
-        cursor.execute("UPDATE sync_counters SET matched_syncs = matched_syncs + 1")
-    elif status == 'no_match':
-        cursor.execute("UPDATE sync_counters SET unmatched_syncs = unmatched_syncs + 1")
-    elif status == 'error':
-        cursor.execute("UPDATE sync_counters SET errors = errors + 1")
+    # Increment sync counters only on new log entries (not on updates of existing row)
+    if is_new_log:
+        cursor.execute("UPDATE sync_counters SET total_syncs = total_syncs + 1")
+        if status == 'success':
+            cursor.execute("UPDATE sync_counters SET matched_syncs = matched_syncs + 1")
+        elif status == 'no_match':
+            cursor.execute("UPDATE sync_counters SET unmatched_syncs = unmatched_syncs + 1")
+        elif status == 'error':
+            cursor.execute("UPDATE sync_counters SET errors = errors + 1")
 
     # Keep only last 1000 logs to prevent unbounded DB growth
     cursor.execute("DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 1000)")

@@ -142,9 +142,10 @@ async def update_contact_chat_link(email: str, api_key: str, base_url: str, reco
         logger.exception(f"NetHunt update contact chat link error for record '{record_id}':")
         return False
 
-async def update_contact(email: str, api_key: str, base_url: str, record_id: str, fields: dict) -> bool:
+async def update_contact(email: str, api_key: str, base_url: str, record_id: str, fields: dict, overwrite: bool = True) -> bool:
     """
     Updates fields on an existing NetHunt Contact.
+    When overwrite=True, replaces existing values. When overwrite=False, appends to multi-value fields.
     """
     if not record_id or not fields:
         return False
@@ -157,7 +158,7 @@ async def update_contact(email: str, api_key: str, base_url: str, record_id: str
     for key, val in fields.items():
         if val is not None and val != "":
             field_actions[key] = {
-                "overwrite": True,
+                "overwrite": overwrite,
                 "add": val
             }
             
