@@ -1000,13 +1000,11 @@ async def _process_sync_task(
     elif is_new_contact:
         deals_text = "- No deals found (newly created contact card) -"
 
-    # STEP 8: Write NetHunt lead link back to HelpCrunch notes
-    card_prefix = "🟢 NetHunt Contact Card (NEW)" if is_new_contact else "🔴 NetHunt Contact Card"
-    formatted_notes = (
-        f"{card_prefix}: {contact_url}\n"
-        f"👤 CRM Name: {contact_name}\n"
-        f"💼 Related Deals:\n{deals_text}"
-    )
+    # STEP 8: Write NetHunt lead link back to HelpCrunch notes (max 255 chars)
+    card_prefix = "🟢 NEW" if is_new_contact else "🔴"
+    formatted_notes = f"{card_prefix} NetHunt: {contact_name} | {contact_url}"
+    if len(formatted_notes) > 255:
+        formatted_notes = formatted_notes[:252] + "..."
 
     details_log.append("Updating HelpCrunch customer notes...")
     notes_updated, notes_error = await helpcrunch.update_customer_notes(hc_api_key, customer_id, formatted_notes)
@@ -1017,7 +1015,7 @@ async def _process_sync_task(
 
     # Add private note in current chat window (if chat_id is present)
     if chat_id:
-        chat_note = (
+        chat_note_md = (
             f"🔗 **NetHunt Integration Hub**\n\n"
             f"Created New Contact: [{contact_name}]({contact_url})\n"
             f"Active Deals:\n{deals_text}"
@@ -1026,8 +1024,15 @@ async def _process_sync_task(
             f"Matched Contact: [{contact_name}]({contact_url})\n"
             f"Active Deals:\n{deals_text if deals else '- No deals found -'}"
         )
+        # Plain text version (without markdown)
+        chat_note_plain = (
+            f"NetHunt Integration Hub\n\n"
+            f"{'Created New Contact' if is_new_contact else 'Matched Contact'}: {contact_name}\n"
+            f"URL: {contact_url}\n"
+            f"Active Deals: {deals_text if deals else '- No deals found -'}"
+        )
         details_log.append(f"Adding private note to chat ID {chat_id}...")
-        private_note_added, note_error = await helpcrunch.add_private_note(hc_api_key, chat_id, chat_note)
+        private_note_added, note_error = await helpcrunch.add_private_note(hc_api_key, chat_id, chat_note_plain, chat_note_md)
         if private_note_added:
             details_log.append("Private note added to the chat inbox.")
         else:

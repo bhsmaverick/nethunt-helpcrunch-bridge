@@ -64,7 +64,7 @@ async def update_customer_notes(api_key: str, customer_id: int, notes: str) -> t
         logger.exception(f"HelpCrunch update customer notes error for {customer_id}:")
         return False, error_detail
 
-async def add_private_note(api_key: str, chat_id: int, text: str) -> tuple:
+async def add_private_note(api_key: str, chat_id: int, text: str, markdown_text: str = None) -> tuple:
     """Adds a private note to a chat conversation in HelpCrunch. Returns (success, error_detail)."""
     url = "https://api.helpcrunch.com/v1/messages"
     headers = _get_headers(api_key)
@@ -73,6 +73,8 @@ async def add_private_note(api_key: str, chat_id: int, text: str) -> tuple:
         "text": text,
         "type": "private"
     }
+    if markdown_text:
+        payload["markdownText"] = markdown_text
     
     try:
         async with httpx.AsyncClient() as client:
