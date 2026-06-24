@@ -834,9 +834,7 @@ async def _process_sync_task(
     if hc_api_key and customer_id:
         cd_props = [item.get("property") for item in hc_update_payload.get("customData", []) if isinstance(item, dict)]
         update_keys = list(hc_update_payload.keys())
-        if cd_props:
-            update_keys[f"customData({len(cd_props)})"] = cd_props
-        details_log.append(f"Bilateral sync: single PUT to HelpCrunch customer {customer_id} with {update_keys}...")
+        details_log.append(f"Bilateral sync: single PUT to HelpCrunch customer {customer_id} with {update_keys} (customData props: {cd_props})...")
         hc_updated, hc_error = await helpcrunch.update_customer(hc_api_key, customer_id, hc_update_payload)
         if hc_updated:
             details_log.append("HelpCrunch customer updated successfully (profile + customData + notes in one call).")
