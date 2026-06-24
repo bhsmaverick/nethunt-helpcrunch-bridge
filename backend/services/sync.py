@@ -147,7 +147,7 @@ def _build_tracking_fields(utm_src_f, utm_med_f, utm_cam_f, utm_trm_f, utm_cnt_f
                            branch_f, branch_mapping_str,
                            utm_source, utm_medium, utm_campaign, utm_term, utm_content,
                            gclid, cust_referer, cust_source, detected_platform,
-                           cust_country, cust_city, details_log, hc_subdomain="", chat_url=""):
+                           cust_country, cust_city, details_log):
     """Build the tracking fields payload for NetHunt CRM."""
     tracking_fields = {}
     if utm_src_f and utm_source: tracking_fields[utm_src_f] = utm_source
@@ -166,12 +166,11 @@ def _build_tracking_fields(utm_src_f, utm_med_f, utm_cam_f, utm_trm_f, utm_cnt_f
         try:
             branch_map = json.loads(branch_mapping_str)
             if isinstance(branch_map, dict):
-                # Search in source, referer, subdomain, and chat_url
-                combined_urls = f"{cust_source} {cust_referer} {hc_subdomain} {chat_url}".lower()
+                combined_urls = f"{cust_source} {cust_referer}".lower()
                 for keyword, branch_value in branch_map.items():
                     if keyword.lower() in combined_urls:
                         tracking_fields[branch_f] = branch_value
-                        details_log.append(f"Branch detected: '{branch_value}' (matched keyword '{keyword}' in source/referer/subdomain)")
+                        details_log.append(f"Branch detected: '{branch_value}' (matched keyword '{keyword}' in source/referer)")
                         break
         except Exception:
             logger.warning(f"Failed to parse branch_mapping setting: {branch_mapping_str}")
@@ -416,12 +415,12 @@ async def _process_sync_task(
     cust_country = location_data.get("countryCode") or ""
     cust_city = location_data.get("city") or ""
 
-    # Fetch full profile for message events
-    if event_type == "message.chat.customer" and hc_api_key and customer_id:
+    # Fetch full profile for all events (webhook payload may be incomplete)
+    if hc_api_key and customer_id:
         try:
             full_profile = await helpcrunch.get_customer(hc_api_key, customer_id)
             if full_profile and isinstance(full_profile, dict) and full_profile.get("id"):
-                logger.info(f"Fetched full HC customer profile for message event: {full_profile.get('name', '')}")
+                logger.info(f"Fetched full HC customer profile: {full_profile.get('name', '')}")
                 for k, v in full_profile.items():
                     if v is not None and v != "":
                         customer_data[k] = v
@@ -430,6 +429,7 @@ async def _process_sync_task(
                 cust_phone = customer_data.get("phone") or ""
                 cust_referer = customer_data.get("referer") or ""
                 cust_source = customer_data.get("source") or ""
+                cust_created_from = customer_data.get("createdFrom") or ""
                 location_data = customer_data.get("location", {}) or {}
                 cust_country = location_data.get("countryCode") or ""
                 cust_city = location_data.get("city") or ""
@@ -635,19 +635,19 @@ async def _process_sync_task(
         return
 
     # --- Build tracking fields ---
-    # Build chat URL first so we can use it for branch matching
-    chat_url = ""
-    if chat_id and hc_subdomain:
-        chat_url = build_chat_link(hc_subdomain, chat_id)
-
     tracking_fields = _build_tracking_fields(
         utm_src_f, utm_med_f, utm_cam_f, utm_trm_f, utm_cnt_f,
         gclid_f, referer_f, source_f, country_f, city_f,
         branch_f, branch_mapping_str,
         utm_source, utm_medium, utm_campaign, utm_term, utm_content,
         gclid, cust_referer, cust_source, detected_platform,
-        cust_country, cust_city, details_log, hc_subdomain=hc_subdomain, chat_url=chat_url
+        cust_country, cust_city, details_log
     )
+
+    # --- Build chat URL ---
+    chat_url = ""
+    if chat_id and hc_subdomain:
+        chat_url = build_chat_link(hc_subdomain, chat_id)
 
     # --- STEP 1: Search local mirror ---
     contact, search_method_used = await _search_local_mirror(chat_url, customer_id, details_log)
