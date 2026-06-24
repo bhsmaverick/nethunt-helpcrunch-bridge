@@ -599,7 +599,7 @@ async def _process_sync_task(
         messengers = extract_messengers(message_text)
         extracted_tg = messengers.get("telegram")
         extracted_ig = messengers.get("instagram")
-        extracted_name = extract_name(message_text)
+        extracted_name = extract_name(message_text, cust_phone or extracted_phone)
 
     # Clean Telegram handle from prefix
     if telegram_handle and telegram_handle.startswith("@"):
