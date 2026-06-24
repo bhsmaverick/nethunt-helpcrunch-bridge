@@ -754,18 +754,11 @@ async def _process_sync_task(
 
     # --- STEP 6: Bilateral sync to HelpCrunch (single combined PUT) ---
     hc_update_payload = {}
-    hc_needs_name = (not cust_name or cust_name == "Unknown Customer" or cust_name.strip() == "")
     effective_name = contact_name if (contact_name and contact_name != "Unknown Customer") else (extracted_name or messenger_name or cust_name)
-    if hc_needs_name:
-        if contact_name and contact_name != "Unknown Customer":
-            hc_update_payload["name"] = contact_name
-            details_log.append(f"Pushing NetHunt name '{contact_name}' to HelpCrunch customer profile.")
-        elif extracted_name:
-            hc_update_payload["name"] = extracted_name
-            details_log.append(f"Pushing extracted name '{extracted_name}' to HelpCrunch customer profile.")
-        elif messenger_name:
-            hc_update_payload["name"] = messenger_name
-            details_log.append(f"Pushing messenger name '{messenger_name}' to HelpCrunch customer profile.")
+    if effective_name:
+        hc_update_payload["name"] = effective_name
+        if effective_name != cust_name:
+            details_log.append(f"Pushing name '{effective_name}' to HelpCrunch customer profile.")
 
     nh_email_val = sync_engine._first_value(contact_fields.get(email_nh_key))
     if not nh_email_val:
@@ -778,7 +771,7 @@ async def _process_sync_task(
     if nh_email_val and not cust_email and not merged_email:
         merged_email = nh_email_val
         details_log.append(f"Using email from NetHunt CRM: '{merged_email}'")
-    if merged_email and (not cust_email or extracted_email):
+    if merged_email:
         hc_update_payload["email"] = merged_email
 
     nh_phone_val = sync_engine._first_value(contact_fields.get(phone_nh_key))
@@ -792,7 +785,7 @@ async def _process_sync_task(
     if nh_phone_val and not cust_phone and not merged_phone:
         merged_phone = nh_phone_val
         details_log.append(f"Using phone from NetHunt CRM: '{merged_phone}'")
-    if merged_phone and (not cust_phone or extracted_phone):
+    if merged_phone:
         hc_update_payload["phone"] = merged_phone
 
     # --- Custom data updates ---
