@@ -678,6 +678,7 @@ async def _process_sync_task(
     if merged_instagram and not instagram_handle:
         custom_data_updates.append({"property": "instagram", "value": merged_instagram})
     custom_data_updates.append({"property": "nethunt_contact_url", "value": contact_url})
+    details_log.append(f"NetHunt contact URL to write: {contact_url} ({len(contact_url)} chars)")
 
     if hc_update_payload:
         details_log.append(f"Bilateral sync: updating HelpCrunch customer profile {customer_id} with {list(hc_update_payload.keys())}...")
@@ -688,7 +689,14 @@ async def _process_sync_task(
             details_log.append(f"Warning: HelpCrunch customer profile update failed. {hc_error}")
 
     if custom_data_updates:
-        existing_custom_data = customer_data.get("customData") or []
+        # Fetch fresh customer profile to get current customData (webhook payload may be incomplete)
+        fresh_profile = None
+        if hc_api_key and customer_id:
+            try:
+                fresh_profile = await helpcrunch.get_customer(hc_api_key, customer_id)
+            except Exception:
+                logger.exception(f"Failed to fetch fresh HC profile for customData merge: {customer_id}")
+        existing_custom_data = (fresh_profile or customer_data).get("customData") or []
         if isinstance(existing_custom_data, list):
             merged_cd = [dict(item) if isinstance(item, dict) else item for item in existing_custom_data]
             existing_props = {item.get("property") for item in merged_cd if isinstance(item, dict)}
