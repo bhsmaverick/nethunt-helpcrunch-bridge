@@ -453,46 +453,25 @@ async def _process_sync_task(
     gclid = cd_parsed["gclid"]
 
     # --- Extended Telegram extraction ---
-    # HelpCrunch may store telegram ID/username in various fields
+    # Per HelpCrunch docs:
+    #   - createdFrom: "telegram" or "telegram_bot"
+    #   - integrationId: channel identifier (e.g. telegramId)
+    #   - userId: for telegram bot, this is the Telegram numeric user ID
+    #   - name: for telegram, HelpCrunch stores the Telegram username as customer name
     telegram_id = ""
-    if not telegram_handle:
-        # Try alternative customData keys for telegram username
-        alt_tg_keys = ("telegram", "telegram_username", "telegramUsername",
-                       "tg_username", "username", "Telegram", "Telegram Username",
-                       "telegram_user", "tg", "Telegram username", "telegram_user_id")
-        if isinstance(cd_raw, list):
-            for item in cd_raw:
-                if isinstance(item, dict):
-                    prop = (item.get("property") or item.get("name") or "")
-                    val = item.get("value") or ""
-                    if prop and prop in alt_tg_keys and val:
-                        telegram_handle = str(val).lstrip("@")
-                        break
-        elif isinstance(cd_raw, dict):
-            for k in alt_tg_keys:
-                val = cd_raw.get(k)
-                if val:
-                    telegram_handle = str(val).lstrip("@")
-                    break
-
-    # If still no handle and createdFrom is telegram, try using the customer name as username
-    if not telegram_handle and cust_created_from in ("telegram", "telegram_bot"):
-        # HelpCrunch sometimes stores the telegram username as the customer name
-        if cust_name and cust_name != "Unknown Customer" and not cust_name.strip().isdigit():
-            # Only use if it looks like a telegram handle (no spaces, starts with letter)
-            if re.match(r'^[a-zA-Z][a-zA-Z0-9_]{4,31}$', cust_name.strip()):
-                telegram_handle = cust_name.strip().lstrip("@")
-                details_log_preview = f"Using customer name as Telegram username: '{telegram_handle}'"
-
-    # Try userId as telegram ID (common for telegram bot integration)
     cust_user_id = str(customer_data.get("userId") or "")
-    if cust_user_id and cust_created_from in ("telegram", "telegram_bot"):
-        if cust_user_id.isdigit():
-            telegram_id = cust_user_id
+    cust_integration_id = str(customer_data.get("integrationId") or "")
 
-    # Also check customData for telegram ID
-    alt_tg_id_keys = ("telegram_id", "telegramId", "Telegram ID", "tg_id", "telegram_user_id")
+    # Telegram ID: from userId (telegram bot) or integrationId
+    if cust_created_from in ("telegram", "telegram_bot"):
+        if cust_user_id and cust_user_id.isdigit():
+            telegram_id = cust_user_id
+        elif cust_integration_id and cust_integration_id.isdigit():
+            telegram_id = cust_integration_id
+
+    # Also check customData for telegram ID (fallback)
     if not telegram_id:
+        alt_tg_id_keys = ("telegram_id", "telegramId", "Telegram ID", "tg_id", "telegram_user_id")
         if isinstance(cd_raw, list):
             for item in cd_raw:
                 if isinstance(item, dict):
@@ -508,11 +487,49 @@ async def _process_sync_task(
                     telegram_id = str(val)
                     break
 
+    # Telegram username: HelpCrunch stores it as customer name for telegram users
+    if not telegram_handle and cust_created_from in ("telegram", "telegram_bot"):
+        if cust_name and cust_name != "Unknown Customer" and not cust_name.strip().isdigit():
+            # Telegram username: 5-32 chars, letters/digits/underscores, starts with letter
+            if re.match(r'^[a-zA-Z][a-zA-Z0-9_]{4,31}$', cust_name.strip()):
+                telegram_handle = cust_name.strip().lstrip("@")
+
+    # Also try customData fallback for telegram username
+    if not telegram_handle:
+        alt_tg_keys = ("telegram", "telegram_username", "telegramUsername",
+                       "tg_username", "username", "Telegram", "Telegram Username",
+                       "telegram_user", "tg")
+        if isinstance(cd_raw, list):
+            for item in cd_raw:
+                if isinstance(item, dict):
+                    prop = (item.get("property") or item.get("name") or "")
+                    val = item.get("value") or ""
+                    if prop and prop in alt_tg_keys and val:
+                        telegram_handle = str(val).lstrip("@")
+                        break
+        elif isinstance(cd_raw, dict):
+            for k in alt_tg_keys:
+                val = cd_raw.get(k)
+                if val:
+                    telegram_handle = str(val).lstrip("@")
+                    break
+
     # --- Extended Instagram extraction ---
+    # Per HelpCrunch docs:
+    #   - createdFrom: "instagram" or "instagram_direct"
+    #   - integrationId: instagramId
+    #   - name: for instagram, HelpCrunch stores the Instagram username as customer name
+    if not instagram_handle and cust_created_from in ("instagram", "instagram_direct"):
+        if cust_name and cust_name != "Unknown Customer" and not cust_name.strip().isdigit():
+            # Instagram username: 1-30 chars, letters/digits/dots/underscores
+            if re.match(r'^[a-zA-Z0-9_.]{1,30}$', cust_name.strip()) and " " not in cust_name.strip():
+                instagram_handle = cust_name.strip().lstrip("@")
+
+    # Also try customData fallback for instagram username
     if not instagram_handle:
         alt_ig_keys = ("instagram", "instagram_username", "instagramUsername",
                        "ig_username", "Instagram", "Instagram Username",
-                       "instagram_user", "ig", "Instagram username")
+                       "instagram_user", "ig")
         if isinstance(cd_raw, list):
             for item in cd_raw:
                 if isinstance(item, dict):
@@ -527,12 +544,6 @@ async def _process_sync_task(
                 if val:
                     instagram_handle = str(val).lstrip("@").rstrip("/")
                     break
-
-    # If still no handle and createdFrom is instagram, try using the customer name as username
-    if not instagram_handle and cust_created_from in ("instagram", "instagram_direct"):
-        if cust_name and cust_name != "Unknown Customer" and not cust_name.strip().isdigit():
-            if re.match(r'^[a-zA-Z0-9_.]{1,30}$', cust_name.strip()) and " " not in cust_name.strip():
-                instagram_handle = cust_name.strip().lstrip("@")
 
     # Log available customData keys for debugging
     if cd_raw:
