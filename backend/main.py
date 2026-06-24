@@ -16,7 +16,7 @@ from typing import Optional
 # Import local modules
 from .database import init_db, get_settings, save_settings, add_log, get_logs, get_metrics, get_db_connection, get_mirror_stats, find_hc_chats_by_customer_id
 from .services import nethunt, helpcrunch
-from .extractors import extract_email, extract_phone, extract_messengers, extract_params_from_url, detect_platform_from_url, build_chat_link, build_nethunt_record_url
+from .extractors import extract_email, extract_phone, extract_messengers, extract_params_from_url, detect_platform_from_url, build_chat_link, build_nethunt_record_url, extract_name
 from . import auth, sync_engine
 
 # Setup Logging
@@ -591,6 +591,7 @@ async def _process_sync_task(
     extracted_phone = None
     extracted_tg = None
     extracted_ig = None
+    extracted_name = None
 
     if message_text:
         extracted_email = extract_email(message_text)
@@ -598,6 +599,7 @@ async def _process_sync_task(
         messengers = extract_messengers(message_text)
         extracted_tg = messengers.get("telegram")
         extracted_ig = messengers.get("instagram")
+        extracted_name = extract_name(message_text)
 
     # Clean Telegram handle from prefix
     if telegram_handle and telegram_handle.startswith("@"):
@@ -614,7 +616,7 @@ async def _process_sync_task(
     details_log.append(f"Customer info: ID={customer_id}, Name='{cust_name}', Email='{cust_email}', Phone='{cust_phone}', Telegram='{telegram_handle}', Instagram='{instagram_handle}'")
     if message_text:
         details_log.append(f"Parsed Message Text: '{message_text}'")
-        details_log.append(f"Extracted from message: Email='{extracted_email or ''}', Phone='{extracted_phone or ''}', Telegram='{extracted_tg or ''}', Instagram='{extracted_ig or ''}'")
+        details_log.append(f"Extracted from message: Email='{extracted_email or ''}', Phone='{extracted_phone or ''}', Telegram='{extracted_tg or ''}', Instagram='{extracted_ig or ''}', Name='{extracted_name or ''}'")
     details_log.append(f"Merged fields: Email='{merged_email}', Phone='{merged_phone}', Telegram='{merged_telegram}', Instagram='{merged_instagram}'")
     details_log.append(f"Tracking: Source='{cust_source}', Referer='{cust_referer}', Country='{cust_country}', City='{cust_city}', Platform='{detected_platform}'")
     if utm_source or utm_medium or utm_campaign or gclid:
@@ -913,9 +915,32 @@ async def _process_sync_task(
     details_log.append(f"NetHunt Contact Card URL: {contact_url}")
 
     # STEP 6: Bilateral Update — update HelpCrunch customer profile with extracted details
+    # Also push NetHunt CRM data (name, email, phone) back to HelpCrunch if HC has empty/unknown values
     hc_update_payload = {}
+    
+    # Name: if HC has "Unknown Customer" but NetHunt has a real name, push it to HC
+    # Also use extracted name from message if available
+    effective_name = contact_name if (contact_name and contact_name != "Unknown Customer") else (extracted_name or cust_name)
+    if contact_name and contact_name != "Unknown Customer" and (not cust_name or cust_name == "Unknown Customer"):
+        hc_update_payload["name"] = contact_name
+        details_log.append(f"Pushing NetHunt name '{contact_name}' to HelpCrunch customer profile.")
+    elif extracted_name and (not cust_name or cust_name == "Unknown Customer"):
+        hc_update_payload["name"] = extracted_name
+        details_log.append(f"Pushing extracted name '{extracted_name}' to HelpCrunch customer profile.")
+    
+    # Email: if HC has no email but NetHunt does, push it
+    nh_email_val = sync_engine._first_value(contact_fields.get(email_nh_key))
+    if nh_email_val and not cust_email and not merged_email:
+        merged_email = nh_email_val
+        details_log.append(f"Using email from NetHunt CRM: '{merged_email}'")
     if merged_email and (not cust_email or extracted_email):
         hc_update_payload["email"] = merged_email
+        
+    # Phone: if HC has no phone but NetHunt does, push it
+    nh_phone_val = sync_engine._first_value(contact_fields.get(phone_nh_key))
+    if nh_phone_val and not cust_phone and not merged_phone:
+        merged_phone = nh_phone_val
+        details_log.append(f"Using phone from NetHunt CRM: '{merged_phone}'")
     if merged_phone and (not cust_phone or extracted_phone):
         hc_update_payload["phone"] = merged_phone
 

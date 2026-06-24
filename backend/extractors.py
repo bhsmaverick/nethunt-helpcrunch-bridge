@@ -2,7 +2,7 @@ import re
 import json
 import base64
 from typing import Optional
-from urllib.parse import urlparse, parse_qs, quote
+from urllib.parse import urlparse, parse_qs
 
 
 def extract_email(text: str) -> Optional[str]:
@@ -163,6 +163,41 @@ def extract_chat_id_from_url(chat_url: str) -> Optional[int]:
     return None
 
 
+def extract_name(text: str) -> Optional[str]:
+    """Extracts a person's name from chat message text.
+    Supports Ukrainian, Russian, and English patterns.
+    """
+    if not text:
+        return None
+    text_lower = text.lower().strip()
+
+    patterns = [
+        # Ukrainian: "мене звати X", "я X", "моє ім'я X", "моє імя X"
+        r'(?:мене\s+звати|я\s+є|мо[єю]\s+ім[\'\u2019]?я)\s*[,:]?\s*([а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]{2,40})',
+        # Ukrainian: "це X" at start
+        r'^це\s+([а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]{2,40})',
+        # Russian: "меня зовут X", "я X", "моё имя X"
+        r'(?:меня\s+зовут|мо[ёю]\s+имя)\s*[,:]?\s*([а-яёА-ЯЁa-zA-Z]{2,40})',
+        # English: "my name is X", "I am X", "I'm X", "this is X"
+        r'(?:my\s+name\s+is|i\s+am|i\'m|this\s+is)\s+([a-zA-Z]{2,40})',
+        # Generic: "ім'я: X", "name: X", "імя: X", "имя: X"
+        r'(?:ім[\'\u2019]?я|name|імя|имя)\s*[:=]\s*([а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]{2,40})',
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text_lower, re.IGNORECASE)
+        if match:
+            name = match.group(1).strip()
+            # Filter out common false positives
+            if name not in ('не', 'тут', 'here', 'there', 'bot', 'бот', 'привет', 'hi', 'hello', 'добрий', 'доброго', 'здравствуйте'):
+                # Return with original case from the original text
+                orig_match = re.search(pattern.replace('а-щьюяієїґ', 'а-щьюяієїґ').replace('а-яё', 'а-яё'), text, re.IGNORECASE)
+                if orig_match:
+                    return orig_match.group(1).strip().capitalize()
+                return name.capitalize()
+    return None
+
+
 def build_chat_link(subdomain: str, chat_id: int) -> str:
     """Builds a HelpCrunch chat URL from subdomain and chat id."""
     return f"https://{subdomain.strip().rstrip('.')}.helpcrunch.com/inbox/chats/{chat_id}"
@@ -171,18 +206,17 @@ def build_chat_link(subdomain: str, chat_id: int) -> str:
 def build_nethunt_record_url(base_url: str, workspace_id: str, folder_id: str, record_id: str) -> str:
     """Builds a NetHunt CRM record URL in the correct web app format.
 
-    Format: {base_url}/web/#nethunt/{base64(url_encode(json))}
+    Format: {base_url}/web/#nethunt/{base64(json)}
     Where json = {"workspaceId":"...","folderId":"...","recordId":"...","recordPage":{"recordId":"..."}}
+    Note: No URL encoding — base64 of raw JSON is shorter and fits in 255 chars.
     """
     if not workspace_id or not folder_id or not record_id:
         return f"{base_url.rstrip('/')}/web/"
     payload = {
         "workspaceId": workspace_id,
         "folderId": folder_id,
-        "recordId": record_id,
-        "recordPage": {"recordId": record_id}
+        "recordId": record_id
     }
     json_str = json.dumps(payload, separators=(",", ":"))
-    url_encoded = quote(json_str)
-    b64_encoded = base64.b64encode(url_encoded.encode()).decode()
+    b64_encoded = base64.b64encode(json_str.encode()).decode()
     return f"{base_url.rstrip('/')}/web/#nethunt/{b64_encoded}"
