@@ -677,7 +677,7 @@ async def _process_sync_task(
         custom_data_updates.append({"property": telegram_hc_key, "value": merged_telegram})
     if merged_instagram and not instagram_handle:
         custom_data_updates.append({"property": "instagram", "value": merged_instagram})
-    custom_data_updates.append({"property": "nethunt_contact_url", "value": contact_url})
+    custom_data_updates.append({"property": "nethunt_contact_url1", "value": contact_url})
     details_log.append(f"NetHunt contact URL to write: {contact_url} ({len(contact_url)} chars)")
 
     if hc_update_payload:
