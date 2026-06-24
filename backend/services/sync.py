@@ -459,7 +459,7 @@ async def _process_sync_task(
         # Try alternative customData keys for telegram username
         alt_tg_keys = ("telegram", "telegram_username", "telegramUsername",
                        "tg_username", "username", "Telegram", "Telegram Username",
-                       "telegram_user", "tg")
+                       "telegram_user", "tg", "Telegram username", "telegram_user_id")
         if isinstance(cd_raw, list):
             for item in cd_raw:
                 if isinstance(item, dict):
@@ -474,6 +474,15 @@ async def _process_sync_task(
                 if val:
                     telegram_handle = str(val).lstrip("@")
                     break
+
+    # If still no handle and createdFrom is telegram, try using the customer name as username
+    if not telegram_handle and cust_created_from in ("telegram", "telegram_bot"):
+        # HelpCrunch sometimes stores the telegram username as the customer name
+        if cust_name and cust_name != "Unknown Customer" and not cust_name.strip().isdigit():
+            # Only use if it looks like a telegram handle (no spaces, starts with letter)
+            if re.match(r'^[a-zA-Z][a-zA-Z0-9_]{4,31}$', cust_name.strip()):
+                telegram_handle = cust_name.strip().lstrip("@")
+                details_log_preview = f"Using customer name as Telegram username: '{telegram_handle}'"
 
     # Try userId as telegram ID (common for telegram bot integration)
     cust_user_id = str(customer_data.get("userId") or "")
@@ -499,6 +508,32 @@ async def _process_sync_task(
                     telegram_id = str(val)
                     break
 
+    # --- Extended Instagram extraction ---
+    if not instagram_handle:
+        alt_ig_keys = ("instagram", "instagram_username", "instagramUsername",
+                       "ig_username", "Instagram", "Instagram Username",
+                       "instagram_user", "ig", "Instagram username")
+        if isinstance(cd_raw, list):
+            for item in cd_raw:
+                if isinstance(item, dict):
+                    prop = (item.get("property") or item.get("name") or "")
+                    val = item.get("value") or ""
+                    if prop and prop in alt_ig_keys and val:
+                        instagram_handle = str(val).lstrip("@").rstrip("/")
+                        break
+        elif isinstance(cd_raw, dict):
+            for k in alt_ig_keys:
+                val = cd_raw.get(k)
+                if val:
+                    instagram_handle = str(val).lstrip("@").rstrip("/")
+                    break
+
+    # If still no handle and createdFrom is instagram, try using the customer name as username
+    if not instagram_handle and cust_created_from in ("instagram", "instagram_direct"):
+        if cust_name and cust_name != "Unknown Customer" and not cust_name.strip().isdigit():
+            if re.match(r'^[a-zA-Z0-9_.]{1,30}$', cust_name.strip()) and " " not in cust_name.strip():
+                instagram_handle = cust_name.strip().lstrip("@")
+
     # Log available customData keys for debugging
     if cd_raw:
         if isinstance(cd_raw, list):
@@ -509,6 +544,7 @@ async def _process_sync_task(
             cd_keys = []
         logger.info(f"HelpCrunch customData keys: {cd_keys}")
         logger.info(f"Telegram: handle='{telegram_handle}', id='{telegram_id}', userId='{cust_user_id}', createdFrom='{cust_created_from}'")
+        logger.info(f"Instagram: handle='{instagram_handle}', createdFrom='{cust_created_from}'")
 
     # --- Parse UTM from URLs ---
     source_params = extract_params_from_url(cust_source)
