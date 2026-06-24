@@ -740,7 +740,7 @@ async def _process_sync_task(
     short_contact_url = f"{nh_base}/app/records/{contacts_folder}/{contact_id}"
     details_log.append(f"NetHunt Contact Card URL: {contact_url}")
 
-    # --- STEP 6: Bilateral sync to HelpCrunch ---
+    # --- STEP 6: Bilateral sync to HelpCrunch (single combined PUT) ---
     hc_update_payload = {}
     hc_needs_name = (not cust_name or cust_name == "Unknown Customer" or cust_name.strip() == "")
     effective_name = contact_name if (contact_name and contact_name != "Unknown Customer") else (extracted_name or messenger_name or cust_name)
@@ -783,6 +783,7 @@ async def _process_sync_task(
     if merged_phone and (not cust_phone or extracted_phone):
         hc_update_payload["phone"] = merged_phone
 
+    # --- Custom data updates ---
     custom_data_updates = []
     if merged_telegram and not telegram_handle:
         custom_data_updates.append({"property": telegram_hc_key, "value": merged_telegram})
@@ -791,23 +792,15 @@ async def _process_sync_task(
     custom_data_updates.append({"property": "nethunt_contact_url1", "value": contact_url})
     details_log.append(f"NetHunt contact URL to write: {contact_url} ({len(contact_url)} chars)")
 
-    if hc_update_payload:
-        details_log.append(f"Bilateral sync: updating HelpCrunch customer profile {customer_id} with {list(hc_update_payload.keys())}...")
-        hc_updated, hc_error = await helpcrunch.update_customer(hc_api_key, customer_id, hc_update_payload)
-        if hc_updated:
-            details_log.append("HelpCrunch customer profile updated successfully.")
-        else:
-            details_log.append(f"Warning: HelpCrunch customer profile update failed. {hc_error}")
+    # --- Notes ---
+    card_prefix = "🟢 NEW" if is_new_contact else "🔴"
+    formatted_notes = f"{card_prefix} NetHunt: {contact_name} (ID: {contact_id})"
+    if len(formatted_notes) > 255:
+        formatted_notes = formatted_notes[:252] + "..."
 
+    # --- Merge customData with existing (reuse full_profile if available) ---
     if custom_data_updates:
-        # Fetch fresh customer profile to get current customData (webhook payload may be incomplete)
-        fresh_profile = None
-        if hc_api_key and customer_id:
-            try:
-                fresh_profile = await helpcrunch.get_customer(hc_api_key, customer_id)
-            except Exception:
-                logger.exception(f"Failed to fetch fresh HC profile for customData merge: {customer_id}")
-        existing_custom_data = (fresh_profile or customer_data).get("customData") or []
+        existing_custom_data = customer_data.get("customData") or []
         if isinstance(existing_custom_data, list):
             merged_cd = [dict(item) if isinstance(item, dict) else item for item in existing_custom_data]
             existing_props = {item.get("property") for item in merged_cd if isinstance(item, dict)}
@@ -819,7 +812,7 @@ async def _process_sync_task(
                         if isinstance(item, dict) and item.get("property") == update["property"]:
                             item["value"] = update["value"]
                             break
-            cd_payload = {"customData": merged_cd}
+            hc_update_payload["customData"] = merged_cd
         elif isinstance(existing_custom_data, dict):
             merged_cd = [{"property": k, "value": v} for k, v in existing_custom_data.items()]
             existing_props = set(existing_custom_data.keys())
@@ -831,25 +824,30 @@ async def _process_sync_task(
                         if item["property"] == update["property"]:
                             item["value"] = update["value"]
                             break
-            cd_payload = {"customData": merged_cd}
+            hc_update_payload["customData"] = merged_cd
         else:
-            cd_payload = {"customData": custom_data_updates}
+            hc_update_payload["customData"] = custom_data_updates
 
-        cd_props = [item.get("property") for item in cd_payload["customData"] if isinstance(item, dict)]
-        details_log.append(f"Updating HelpCrunch customData: {cd_props}...")
-        cd_updated, cd_error = await helpcrunch.update_customer(hc_api_key, customer_id, cd_payload)
-        if cd_updated:
-            details_log.append("HelpCrunch customData updated successfully.")
+    hc_update_payload["notes"] = formatted_notes
+
+    # --- Single combined PUT to HelpCrunch ---
+    if hc_api_key and customer_id:
+        cd_props = [item.get("property") for item in hc_update_payload.get("customData", []) if isinstance(item, dict)]
+        update_keys = list(hc_update_payload.keys())
+        if cd_props:
+            update_keys[f"customData({len(cd_props)})"] = cd_props
+        details_log.append(f"Bilateral sync: single PUT to HelpCrunch customer {customer_id} with {update_keys}...")
+        hc_updated, hc_error = await helpcrunch.update_customer(hc_api_key, customer_id, hc_update_payload)
+        if hc_updated:
+            details_log.append("HelpCrunch customer updated successfully (profile + customData + notes in one call).")
         else:
-            details_log.append(f"Warning: HelpCrunch customData update failed. {cd_error}")
-            # Fallback: save NetHunt URL to notes if customData failed
-            if contact_url:
-                notes_text = f"NetHunt CRM: {contact_url}"
-                notes_ok, notes_err = await helpcrunch.update_customer_notes(hc_api_key, customer_id, notes_text)
-                if notes_ok:
-                    details_log.append("Fallback: saved NetHunt URL to customer notes.")
-                else:
-                    details_log.append(f"Fallback notes update also failed: {notes_err}")
+            details_log.append(f"Warning: HelpCrunch customer update failed. {hc_error}")
+            # Fallback: try notes-only update if the combined call failed
+            notes_ok, notes_err = await helpcrunch.update_customer_notes(hc_api_key, customer_id, formatted_notes)
+            if notes_ok:
+                details_log.append("Fallback: saved customer notes only.")
+            else:
+                details_log.append(f"Fallback notes update also failed: {notes_err}")
 
     # --- STEP 7: Fetch deals ---
     deals = []
@@ -886,19 +884,7 @@ async def _process_sync_task(
     elif is_new_contact:
         deals_text = "- No deals found (newly created contact card) -"
 
-    # --- STEP 8: Write notes & private note ---
-    card_prefix = "🟢 NEW" if is_new_contact else "🔴"
-    formatted_notes = f"{card_prefix} NetHunt: {contact_name} (ID: {contact_id})"
-    if len(formatted_notes) > 255:
-        formatted_notes = formatted_notes[:252] + "..."
-
-    details_log.append("Updating HelpCrunch customer notes...")
-    notes_updated, notes_error = await helpcrunch.update_customer_notes(hc_api_key, customer_id, formatted_notes)
-    if notes_updated:
-        details_log.append("Customer notes updated successfully in HelpCrunch.")
-    else:
-        details_log.append(f"Warning: HelpCrunch customer notes update failed. {notes_error}")
-
+    # --- STEP 8: Private note to chat (deals info) ---
     if chat_id:
         chat_note_md = (
             f"🔗 **NetHunt Integration Hub**\n\n"

@@ -2,6 +2,7 @@ import httpx
 import hmac
 import hashlib
 import logging
+import asyncio
 
 logger = logging.getLogger("bridge")
 
@@ -64,7 +65,7 @@ async def update_customer_notes(api_key: str, customer_id: int, notes: str) -> t
         logger.exception(f"HelpCrunch update customer notes error for {customer_id}:")
         return False, error_detail
 
-async def add_private_note(api_key: str, chat_id: int, text: str, markdown_text: str = None) -> tuple:
+async def add_private_note(api_key: str, chat_id: int, text: str, markdown_text: str = None, max_retries: int = 3) -> tuple:
     """Adds a private note to a chat conversation in HelpCrunch. Returns (success, error_detail)."""
     url = "https://api.helpcrunch.com/v1/messages"
     headers = _get_headers(api_key)
@@ -76,18 +77,25 @@ async def add_private_note(api_key: str, chat_id: int, text: str, markdown_text:
     if markdown_text:
         payload["markdownText"] = markdown_text
     
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, headers=headers, json=payload, timeout=10.0)
-            if response.status_code in (200, 201):
-                return True, None
-            error_detail = f"Status {response.status_code}, Body {response.text}"
-            logger.warning(f"Failed to add HelpCrunch private note: {error_detail}")
+    for attempt in range(max_retries + 1):
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, headers=headers, json=payload, timeout=10.0)
+                if response.status_code in (200, 201):
+                    return True, None
+                if response.status_code == 429 and attempt < max_retries:
+                    wait = (attempt + 1) * 2
+                    logger.warning(f"HC rate limited (429) for private note chat {chat_id}, retrying in {wait}s (attempt {attempt+1}/{max_retries})")
+                    await asyncio.sleep(wait)
+                    continue
+                error_detail = f"Status {response.status_code}, Body {response.text}"
+                logger.warning(f"Failed to add HelpCrunch private note: {error_detail}")
+                return False, error_detail
+        except Exception as e:
+            error_detail = str(e)
+            logger.exception(f"HelpCrunch add private note error in chat {chat_id}:")
             return False, error_detail
-    except Exception as e:
-        error_detail = str(e)
-        logger.exception(f"HelpCrunch add private note error in chat {chat_id}:")
-        return False, error_detail
+    return False, "Max retries exceeded"
 
 def verify_signature(raw_body: bytes, signature: str, secret: str) -> bool:
     """
@@ -115,26 +123,34 @@ def verify_signature(raw_body: bytes, signature: str, secret: str) -> bool:
         logger.exception("Error verifying signature:")
         return False
 
-async def update_customer(api_key: str, customer_id: int, payload: dict) -> tuple:
+async def update_customer(api_key: str, customer_id: int, payload: dict, max_retries: int = 3) -> tuple:
     """
-    Updates general customer details in HelpCrunch (e.g. email, phone, customData).
+    Updates general customer details in HelpCrunch (e.g. email, phone, customData, notes).
     Returns (success, error_detail).
+    Retries on 429 with exponential backoff.
     """
     url = f"https://api.helpcrunch.com/v1/customers/{customer_id}"
     headers = _get_headers(api_key)
     
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.put(url, headers=headers, json=payload, timeout=10.0)
-            if response.status_code in (200, 201):
-                return True, None
-            error_detail = f"Status {response.status_code}, Body {response.text}"
-            logger.warning(f"Failed to update HelpCrunch customer {customer_id}: {error_detail}")
+    for attempt in range(max_retries + 1):
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.put(url, headers=headers, json=payload, timeout=10.0)
+                if response.status_code in (200, 201):
+                    return True, None
+                if response.status_code == 429 and attempt < max_retries:
+                    wait = (attempt + 1) * 2
+                    logger.warning(f"HC rate limited (429) for customer {customer_id}, retrying in {wait}s (attempt {attempt+1}/{max_retries})")
+                    await asyncio.sleep(wait)
+                    continue
+                error_detail = f"Status {response.status_code}, Body {response.text}"
+                logger.warning(f"Failed to update HelpCrunch customer {customer_id}: {error_detail}")
+                return False, error_detail
+        except Exception as e:
+            error_detail = str(e)
+            logger.exception(f"HelpCrunch update customer error for {customer_id}:")
             return False, error_detail
-    except Exception as e:
-        error_detail = str(e)
-        logger.exception(f"HelpCrunch update customer error for {customer_id}:")
-        return False, error_detail
+    return False, "Max retries exceeded"
 
 
 # --- Bulk / sync endpoints for local mirror ---
