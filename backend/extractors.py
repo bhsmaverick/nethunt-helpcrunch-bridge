@@ -4,6 +4,13 @@ import base64
 from typing import Optional
 from urllib.parse import urlparse, parse_qs
 
+try:
+    from .names_uk import NAMES_SET, is_likely_name
+except ImportError:
+    NAMES_SET = frozenset()
+    def is_likely_name(word: str) -> bool:
+        return bool(word) and len(word) >= 2
+
 
 def extract_email(text: str) -> Optional[str]:
     if not text:
@@ -253,7 +260,10 @@ def extract_name(text: str, phone: str = None) -> Optional[str]:
         if looks_like_name:
             # Check first word against stopwords
             if words[0].lower() not in stopwords and words[0][0].isupper():
-                return ' '.join(w.capitalize() for w in words)
+                # Validate against names database if available
+                first_name = words[0].capitalize()
+                if is_likely_name(first_name):
+                    return ' '.join(w.capitalize() for w in words)
 
     return None
 

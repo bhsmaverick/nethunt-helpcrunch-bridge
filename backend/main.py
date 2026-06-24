@@ -449,6 +449,7 @@ async def _process_sync_task(
     cust_phone = customer_data.get("phone") or ""
     cust_referer = customer_data.get("referer") or ""
     cust_source = customer_data.get("source") or ""
+    cust_created_from = customer_data.get("createdFrom") or ""
     location_data = customer_data.get("location", {}) or {}
     cust_country = location_data.get("countryCode") or ""
     cust_city = location_data.get("city") or ""
@@ -604,6 +605,36 @@ async def _process_sync_task(
     # Clean Telegram handle from prefix
     if telegram_handle and telegram_handle.startswith("@"):
         telegram_handle = telegram_handle[1:]
+
+    # If HC has "Unknown Customer", try to get name from messenger handles or profile
+    messenger_name = None
+    if cust_name == "Unknown Customer":
+        # Telegram handle might contain a real name (e.g. "Ім'я Прізвище" stored as handle)
+        if telegram_handle:
+            # Try to extract a name-like part from the handle
+            # Telegram handles are usually @username, but display names can be stored
+            parts = telegram_handle.replace("_", " ").split()
+            name_parts = [p for p in parts if p and p[0].isupper() and len(p) >= 2]
+            if name_parts:
+                messenger_name = " ".join(name_parts[:2])
+        if not messenger_name and instagram_handle:
+            parts = instagram_handle.replace("_", " ").replace(".", " ").split()
+            name_parts = [p for p in parts if p and p[0].isupper() and len(p) >= 2]
+            if name_parts:
+                messenger_name = " ".join(name_parts[:2])
+        # Check if customer came from Telegram/Instagram — HC may have the name in a different field
+        if not messenger_name and cust_created_from in ("telegram", "instagram"):
+            # The name from messenger profile should already be in cust_name
+            # but if it's still "Unknown Customer", try customData fields
+            cd = customer_data.get("customData") or []
+            if isinstance(cd, list):
+                for item in cd:
+                    if isinstance(item, dict):
+                        prop = item.get("property") or item.get("name") or ""
+                        val = item.get("value") or ""
+                        if prop.lower() in ("name", "first_name", "first name", "display_name", "display name", "full_name", "full name") and val:
+                            messenger_name = val
+                            break
 
     # Merge extracted details (message/URL extraction overrides profile/custom data if profile is empty)
     merged_email = cust_email or extracted_email or ""
@@ -919,14 +950,17 @@ async def _process_sync_task(
     hc_update_payload = {}
     
     # Name: if HC has "Unknown Customer" but NetHunt has a real name, push it to HC
-    # Also use extracted name from message if available
-    effective_name = contact_name if (contact_name and contact_name != "Unknown Customer") else (extracted_name or cust_name)
+    # Also use extracted name from message or messenger profile if available
+    effective_name = contact_name if (contact_name and contact_name != "Unknown Customer") else (extracted_name or messenger_name or cust_name)
     if contact_name and contact_name != "Unknown Customer" and (not cust_name or cust_name == "Unknown Customer"):
         hc_update_payload["name"] = contact_name
         details_log.append(f"Pushing NetHunt name '{contact_name}' to HelpCrunch customer profile.")
     elif extracted_name and (not cust_name or cust_name == "Unknown Customer"):
         hc_update_payload["name"] = extracted_name
         details_log.append(f"Pushing extracted name '{extracted_name}' to HelpCrunch customer profile.")
+    elif messenger_name and (not cust_name or cust_name == "Unknown Customer"):
+        hc_update_payload["name"] = messenger_name
+        details_log.append(f"Pushing messenger name '{messenger_name}' to HelpCrunch customer profile.")
     
     # Email: if HC has no email but NetHunt does, push it
     nh_email_val = sync_engine._first_value(contact_fields.get(email_nh_key))
