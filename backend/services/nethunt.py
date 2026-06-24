@@ -96,10 +96,10 @@ async def get_contact(email: str, api_key: str, base_url: str, record_id: str, f
         return None
     headers = _get_auth_headers(email, api_key)
 
-    # Try the find-record endpoint with folder_id
+    # Try the find-record endpoint with folder_id and recordId param
     if folder_id:
         url = f"{_clean_base_url(base_url)}/api/v1/zapier/searches/find-record/{folder_id}"
-        params = {"query": record_id, "limit": 1}
+        params = {"recordId": record_id, "limit": 1}
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(url, headers=headers, params=params, timeout=10.0)
