@@ -283,7 +283,7 @@ async def _search_nethunt_api(customer_id, merged_email, merged_phone, merged_te
 async def _update_existing_contact(contact, customer_id, merged_email, merged_phone, merged_telegram,
                                    merged_instagram, tracking_fields, settings,
                                    hc_id_nh_key, email_nh_key, phone_nh_key, telegram_nh_key, instagram_nh_key,
-                                   nh_email, nh_key, nh_base, details_log):
+                                   nh_email, nh_key, nh_base, details_log, telegram_id=""):
     """Update an existing NetHunt contact with missing/append fields."""
     contact_id = contact.get("id")
     contact_fields = contact.get("fields", {})
@@ -307,10 +307,13 @@ async def _update_existing_contact(contact, customer_id, merged_email, merged_ph
         overwrite_fields[hc_id_nh_key] = str(customer_id)
         details_log.append(f"Linking HelpCrunch ID to NetHunt contact: '{customer_id}'")
 
+    # Build list of fields to update; if no telegram handle but have ID, use ID
+    tg_val = merged_telegram or (telegram_id if not contact_fields.get(telegram_nh_key) else "")
+
     for label, val, field_key in [
         ("Email", merged_email, email_nh_key),
         ("Phone", merged_phone, phone_nh_key),
-        ("Telegram handle", merged_telegram, telegram_nh_key),
+        ("Telegram handle", tg_val, telegram_nh_key),
         ("Instagram handle", merged_instagram, instagram_nh_key),
     ]:
         if val and field_key:
@@ -438,7 +441,8 @@ async def _process_sync_task(
             cust_phone = normalized_initial_phone
 
     # --- Parse customData ---
-    cd_parsed = _parse_custom_data(customer_data.get("customData"), telegram_hc_key)
+    cd_raw = customer_data.get("customData")
+    cd_parsed = _parse_custom_data(cd_raw, telegram_hc_key)
     telegram_handle = cd_parsed["telegram_handle"]
     instagram_handle = cd_parsed["instagram_handle"]
     utm_source = cd_parsed["utm_source"]
@@ -447,6 +451,64 @@ async def _process_sync_task(
     utm_term = cd_parsed["utm_term"]
     utm_content = cd_parsed["utm_content"]
     gclid = cd_parsed["gclid"]
+
+    # --- Extended Telegram extraction ---
+    # HelpCrunch may store telegram ID/username in various fields
+    telegram_id = ""
+    if not telegram_handle:
+        # Try alternative customData keys for telegram username
+        alt_tg_keys = ("telegram", "telegram_username", "telegramUsername",
+                       "tg_username", "username", "Telegram", "Telegram Username",
+                       "telegram_user", "tg")
+        if isinstance(cd_raw, list):
+            for item in cd_raw:
+                if isinstance(item, dict):
+                    prop = (item.get("property") or item.get("name") or "")
+                    val = item.get("value") or ""
+                    if prop and prop in alt_tg_keys and val:
+                        telegram_handle = str(val).lstrip("@")
+                        break
+        elif isinstance(cd_raw, dict):
+            for k in alt_tg_keys:
+                val = cd_raw.get(k)
+                if val:
+                    telegram_handle = str(val).lstrip("@")
+                    break
+
+    # Try userId as telegram ID (common for telegram bot integration)
+    cust_user_id = str(customer_data.get("userId") or "")
+    if cust_user_id and cust_created_from in ("telegram", "telegram_bot"):
+        if cust_user_id.isdigit():
+            telegram_id = cust_user_id
+
+    # Also check customData for telegram ID
+    alt_tg_id_keys = ("telegram_id", "telegramId", "Telegram ID", "tg_id", "telegram_user_id")
+    if not telegram_id:
+        if isinstance(cd_raw, list):
+            for item in cd_raw:
+                if isinstance(item, dict):
+                    prop = (item.get("property") or item.get("name") or "")
+                    val = item.get("value") or ""
+                    if prop and prop in alt_tg_id_keys and val:
+                        telegram_id = str(val)
+                        break
+        elif isinstance(cd_raw, dict):
+            for k in alt_tg_id_keys:
+                val = cd_raw.get(k)
+                if val:
+                    telegram_id = str(val)
+                    break
+
+    # Log available customData keys for debugging
+    if cd_raw:
+        if isinstance(cd_raw, list):
+            cd_keys = [item.get("property") or item.get("name") for item in cd_raw if isinstance(item, dict)]
+        elif isinstance(cd_raw, dict):
+            cd_keys = list(cd_raw.keys())
+        else:
+            cd_keys = []
+        logger.info(f"HelpCrunch customData keys: {cd_keys}")
+        logger.info(f"Telegram: handle='{telegram_handle}', id='{telegram_id}', userId='{cust_user_id}', createdFrom='{cust_created_from}'")
 
     # --- Parse UTM from URLs ---
     source_params = extract_params_from_url(cust_source)
@@ -506,13 +568,13 @@ async def _process_sync_task(
     # --- Logging ---
     details_log = []
     details_log.append(f"Starting processing for Event: {event_type}")
-    details_log.append(f"Customer info: ID={customer_id}, Name='{cust_name}', Email='{cust_email}', Phone='{cust_phone}', Telegram='{telegram_handle}', Instagram='{instagram_handle}', createdFrom='{cust_created_from}'")
+    details_log.append(f"Customer info: ID={customer_id}, Name='{cust_name}', Email='{cust_email}', Phone='{cust_phone}', Telegram='{telegram_handle}', TelegramID='{telegram_id}', Instagram='{instagram_handle}', createdFrom='{cust_created_from}'")
     if messenger_name:
         details_log.append(f"Detected messenger name: '{messenger_name}'")
     if message_text:
         details_log.append(f"Parsed Message Text: '{message_text}'")
         details_log.append(f"Extracted from message: Email='{extracted_email or ''}', Phone='{extracted_phone or ''}', Telegram='{extracted_tg or ''}', Instagram='{extracted_ig or ''}', Name='{extracted_name or ''}'")
-    details_log.append(f"Merged fields: Email='{merged_email}', Phone='{merged_phone}', Telegram='{merged_telegram}', Instagram='{merged_instagram}'")
+    details_log.append(f"Merged fields: Email='{merged_email}', Phone='{merged_phone}', Telegram='{merged_telegram}', TelegramID='{telegram_id}', Instagram='{merged_instagram}'")
     details_log.append(f"Tracking: Source='{cust_source}', Referer='{cust_referer}', Country='{cust_country}', City='{cust_city}', Platform='{detected_platform}'")
     if utm_source or utm_medium or utm_campaign or gclid:
         details_log.append(f"UTMs: src='{utm_source}', med='{utm_medium}', cam='{utm_campaign}', gclid='{gclid}'")
@@ -565,6 +627,8 @@ async def _process_sync_task(
             new_fields[phone_nh_key] = [merged_phone]
         if merged_telegram and telegram_nh_key:
             new_fields[telegram_nh_key] = merged_telegram
+        elif telegram_id and telegram_nh_key:
+            new_fields[telegram_nh_key] = telegram_id
         if merged_instagram and instagram_nh_key:
             new_fields[instagram_nh_key] = merged_instagram
 
@@ -593,7 +657,7 @@ async def _process_sync_task(
             contact, customer_id, merged_email, merged_phone, merged_telegram,
             merged_instagram, tracking_fields, settings,
             hc_id_nh_key, email_nh_key, phone_nh_key, telegram_nh_key, instagram_nh_key,
-            nh_email, nh_key, nh_base, details_log
+            nh_email, nh_key, nh_base, details_log, telegram_id=telegram_id
         )
 
     contact_id = contact.get("id")
