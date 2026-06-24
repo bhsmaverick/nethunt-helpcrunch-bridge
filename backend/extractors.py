@@ -272,15 +272,16 @@ def build_nethunt_record_url(base_url: str, workspace_id: str, folder_id: str, r
     """Builds a NetHunt CRM record URL in the correct web app format.
 
     Format: {base_url}/web/#nethunt/{base64(json)}
-    Where json = {"workspaceId":"...","folderId":"...","recordId":"..."}
-    Uses base64 of raw JSON to keep URL under 255 chars for HelpCrunch customData limit.
+    Where json = {"workspaceId":"...","folderId":"...","recordId":"...","recordPage":{"recordId":"..."}}
+    Uses base64 of raw JSON (no URL encoding) — NetHunt opens this correctly.
     """
     if not workspace_id or not folder_id or not record_id:
         return f"{base_url.rstrip('/')}/web/"
     payload = {
         "workspaceId": workspace_id,
         "folderId": folder_id,
-        "recordId": record_id
+        "recordId": record_id,
+        "recordPage": {"recordId": record_id}
     }
     json_str = json.dumps(payload, separators=(",", ":"))
     b64_encoded = base64.b64encode(json_str.encode()).decode()

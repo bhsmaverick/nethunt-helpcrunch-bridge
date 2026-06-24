@@ -723,6 +723,14 @@ async def _process_sync_task(
             details_log.append("HelpCrunch customData updated successfully.")
         else:
             details_log.append(f"Warning: HelpCrunch customData update failed. {cd_error}")
+            # Fallback: save NetHunt URL to notes if customData failed
+            if contact_url:
+                notes_text = f"NetHunt CRM: {contact_url}"
+                notes_ok, notes_err = await helpcrunch.update_customer_notes(hc_api_key, customer_id, notes_text)
+                if notes_ok:
+                    details_log.append("Fallback: saved NetHunt URL to customer notes.")
+                else:
+                    details_log.append(f"Fallback notes update also failed: {notes_err}")
 
     # --- STEP 7: Fetch deals ---
     deals = []
