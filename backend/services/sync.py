@@ -709,6 +709,15 @@ async def _process_sync_task(
 
     contact_id = contact.get("id")
     contact_fields = contact.get("fields", {})
+    
+    # Fetch fresh contact data from NetHunt to get current fields (local mirror may be stale)
+    if contact_id and not is_new_contact:
+        fresh_contact = await nethunt.get_contact(nh_email, nh_key, nh_base, contact_id)
+        if fresh_contact and fresh_contact.get("fields"):
+            contact = fresh_contact
+            contact_fields = contact.get("fields", {})
+            details_log.append("Fetched fresh contact data from NetHunt API for bilateral sync.")
+    
     contact_name = contact.get("name") or sync_engine._first_value(contact_fields.get(name_nh_key)) or sync_engine._first_value(contact_fields.get("Name")) or cust_name
     details_log.append(f"Using NetHunt Contact: Name='{contact_name}', ID={contact_id} ({search_method_used})")
     nh_field_keys = list(contact_fields.keys()) if contact_fields else []

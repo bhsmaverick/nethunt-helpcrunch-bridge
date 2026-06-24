@@ -86,6 +86,33 @@ async def find_contact(email: str, api_key: str, base_url: str, folder_id: str, 
         logger.exception(f"NetHunt search contact error for query '{query}':")
         return None
 
+async def get_contact(email: str, api_key: str, base_url: str, record_id: str) -> dict:
+    """
+    Fetches a single NetHunt record by its ID using the find-record endpoint.
+    Returns the record dict or None if not found.
+    """
+    if not record_id:
+        return None
+    # Use the read-record endpoint if available, otherwise search by recordId
+    url = f"{_clean_base_url(base_url)}/api/v1/zapier/triggers/read-record"
+    params = {"recordId": record_id}
+    headers = _get_auth_headers(email, api_key)
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, params=params, timeout=10.0)
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, dict) and "id" in data:
+                    return data
+                elif isinstance(data, list) and len(data) > 0:
+                    return data[0]
+            logger.warning(f"NetHunt get_contact status {response.status_code} for record '{record_id}': {response.text}")
+            return None
+    except Exception as e:
+        logger.exception(f"NetHunt get_contact error for record '{record_id}':")
+        return None
+
 async def find_deals(email: str, api_key: str, base_url: str, deals_folder_id: str, contact_record_id: str) -> list:
     """
     Retrieves deals related to a contact record ID.
