@@ -11,6 +11,29 @@ except ImportError:
     def is_likely_name(word: str) -> bool:
         return bool(word) and len(word) >= 2
 
+# Cyrillic character ranges (Ukrainian + Russian + Latin)
+_CYR_LAT = r'а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z'
+
+# Common false positives for name extraction
+_NAME_STOPWORDS = frozenset({
+    'не', 'тут', 'here', 'there', 'bot', 'бот', 'привет', 'hi', 'hello',
+    'добрий', 'доброго', 'здравствуйте', 'так', 'ні', 'yes', 'no',
+    'дякую', 'спасибо', 'ok', 'ок', 'добре', 'вечір',
+    'день', 'ранок', 'було', 'немає', 'можна', 'будь', 'ласка',
+    'питання', 'консультація', 'адвокат', 'юрист', 'закон',
+})
+
+# Name extraction patterns (tried in order)
+_NAME_PATTERNS = [
+    r'(?:мене\s+звати|я\s+є|мо[єю]\s+ім[\'\u2019]?я)\s*[:,]?\s*([а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]{2,40})',
+    r'^це\s+([а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]{2,40})',
+    r'(?:меня\s+зовут|мо[ёю]\s+имя)\s*[:,]?\s*([а-яёА-ЯЁa-zA-Z]{2,40})',
+    r'(?:my\s+name\s+is|i\s+am|i\'m|this\s+is)\s+([a-zA-Z]{2,40})',
+    r'(?:ім[\'\u2019]?я|name|імя|имя)\s*[:=]\s*([а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]{2,40})',
+    r'(?:можна|звати|просто|я\s+же|це\s+ж)\s+([а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]{2,40})',
+    r'(?:звертайтеся|називайте|обращайтесь|называйте)\s+([а-щьюяієїґА-ЩЬЮЯІЄЇҐа-яёА-ЯЁa-zA-Z]{2,40})',
+]
+
 
 def extract_email(text: str) -> Optional[str]:
     if not text:
@@ -170,6 +193,51 @@ def extract_chat_id_from_url(chat_url: str) -> Optional[int]:
     return None
 
 
+def _is_valid_name(name: str) -> bool:
+    """Check if a candidate name is not a stopword."""
+    return name.lower() not in _NAME_STOPWORDS
+
+
+def _extract_name_near_phone(text: str, phone: str) -> Optional[str]:
+    """Find a name adjacent to a phone number in text."""
+    phone_digits = re.sub(r'[^\d]', '', phone)
+    if len(phone_digits) < 6:
+        return None
+    for match_len in (9, 8, 7, 6):
+        phone_part = phone_digits[-match_len:]
+        phone_pos = text.find(phone_part)
+        if phone_pos == -1:
+            continue
+        phone_end = phone_pos + len(phone_part)
+        # Name BEFORE phone
+        before_text = re.sub(r'[^а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]+$', '', text[:phone_pos].rstrip())
+        m = re.search(rf'([{_CYR_LAT}]{{2,40}})\s*[,\.]?$', before_text)
+        if m and _is_valid_name(m.group(1)):
+            return m.group(1).strip().capitalize()
+        # Name AFTER phone
+        after_text = text[phone_end:].lstrip()
+        m = re.match(rf'[,\.]?\s*([{_CYR_LAT}]{{2,40}})', after_text)
+        if m and _is_valid_name(m.group(1)):
+            return m.group(1).strip().capitalize()
+        break
+    return None
+
+
+def _extract_standalone_name(text_stripped: str) -> Optional[str]:
+    """Extract a standalone name from a short message (1-3 words, all Cyrillic)."""
+    words = text_stripped.split()
+    if not (1 <= len(words) <= 3):
+        return None
+    name_word_re = re.compile(r"^[А-ЩЬЮЯІЄЇҐа-щьюяієїґ]+(?:[-\u2019']?[А-ЩЬЮЯІЄЇҐа-щьюяієїґ]+)?$")
+    if not all(name_word_re.match(w) for w in words):
+        return None
+    if not _is_valid_name(words[0]) or not words[0][0].isupper():
+        return None
+    if is_likely_name(words[0].capitalize()):
+        return ' '.join(w.capitalize() for w in words)
+    return None
+
+
 def extract_name(text: str, phone: str = None) -> Optional[str]:
     """Extracts a person's name from chat message text.
     Supports Ukrainian, Russian, and English patterns.
@@ -178,94 +246,21 @@ def extract_name(text: str, phone: str = None) -> Optional[str]:
     if not text:
         return None
     text_stripped = text.strip()
-    text_lower = text_stripped.lower()
 
-    # Common false positives to filter out
-    stopwords = {'не', 'тут', 'here', 'there', 'bot', 'бот', 'привет', 'hi', 'hello',
-                 'добрий', 'доброго', 'здравствуйте', 'так', 'ні', 'yes', 'no',
-                 'дякую', 'спасибо', 'ok', 'ок', 'добре', 'добрий', 'вечір',
-                 'день', 'ранок', 'було', 'немає', 'можна', 'будь', 'ласка',
-                 'питання', 'консультація', 'адвокат', 'юрист', 'закон'}
+    # Try regex patterns first
+    for pattern in _NAME_PATTERNS:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match and _is_valid_name(match.group(1)):
+            return match.group(1).strip().capitalize()
 
-    patterns = [
-        # Ukrainian: "мене звати X", "я X", "моє ім'я X", "моє імя X"
-        r'(?:мене\s+звати|я\s+є|мо[єю]\s+ім[\'\u2019]?я)\s*[,:]?\s*([а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]{2,40})',
-        # Ukrainian: "це X" at start
-        r'^це\s+([а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]{2,40})',
-        # Russian: "меня зовут X", "я X", "моё имя X"
-        r'(?:меня\s+зовут|мо[ёю]\s+имя)\s*[,:]?\s*([а-яёА-ЯЁa-zA-Z]{2,40})',
-        # English: "my name is X", "I am X", "I'm X", "this is X"
-        r'(?:my\s+name\s+is|i\s+am|i\'m|this\s+is)\s+([a-zA-Z]{2,40})',
-        # Generic: "ім'я: X", "name: X", "імя: X", "имя: X"
-        r'(?:ім[\'\u2019]?я|name|імя|имя)\s*[:=]\s*([а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]{2,40})',
-        # Response to "як звертатись / як вас звати": "можна X", "звати X", "я X", "просто X"
-        r'(?:можна|звати|просто|я\s+же|це\s+ж)\s+([а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]{2,40})',
-        # "звертайтеся X", "називайте X"
-        r'(?:звертайтеся|називайте|обращайтесь|называйте)\s+([а-щьюяієїґА-ЩЬЮЯІЄЇҐа-яёА-ЯЁa-zA-Z]{2,40})',
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, text_lower, re.IGNORECASE)
-        if match:
-            name = match.group(1).strip()
-            if name.lower() not in stopwords:
-                orig_match = re.search(pattern, text, re.IGNORECASE)
-                if orig_match:
-                    return orig_match.group(1).strip().capitalize()
-                return name.capitalize()
-
-    # Try to find name near phone number
+    # Try name near phone
     if phone:
-        phone_digits = re.sub(r'[^\d]', '', phone)
-        if len(phone_digits) >= 6:
-            # Try matching with last 6-9 digits (country code may be absent in message)
-            for match_len in (9, 8, 7, 6):
-                phone_part = phone_digits[-match_len:]
-                phone_pos = text.find(phone_part)
-                if phone_pos == -1:
-                    continue
-                # Find the full phone span in text
-                phone_end = phone_pos + len(phone_part)
-                # Look for name BEFORE phone: scan backwards for a Cyrillic/Latin word
-                before_text = text[:phone_pos].rstrip()
-                # Strip trailing non-letter chars (digits, spaces, punctuation)
-                before_text = re.sub(r'[^а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]+$', '', before_text)
-                name_before_match = re.search(
-                    r'([а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]{2,40})\s*[,\.]?$',
-                    before_text
-                )
-                if name_before_match:
-                    name = name_before_match.group(1).strip()
-                    if name.lower() not in stopwords:
-                        return name.capitalize()
-                # Look for name AFTER phone: scan forward for a Cyrillic/Latin word
-                after_text = text[phone_end:].lstrip()
-                name_after_match = re.match(
-                    r'[,\.]?\s*([а-щьюяієїґА-ЩЬЮЯІЄЇҐa-zA-Z]{2,40})',
-                    after_text
-                )
-                if name_after_match:
-                    name = name_after_match.group(1).strip()
-                    if name.lower() not in stopwords:
-                        return name.capitalize()
-                break  # Found phone in text, no need to try shorter matches
+        name = _extract_name_near_phone(text, phone)
+        if name:
+            return name
 
-    # Standalone name: short message (1-3 words), all Cyrillic, looks like a name
-    # Only if message is very short (likely a direct answer to "як вас звати?")
-    words = text_stripped.split()
-    if 1 <= len(words) <= 3:
-        # Check if all words look like names (Cyrillic, no digits/punctuation except hyphens/apostrophes)
-        name_word_re = re.compile(r"^[А-ЩЬЮЯІЄЇҐа-щьюяієїґ]+(?:[-\u2019']?[А-ЩЬЮЯІЄЇҐа-щьюяієїґ]+)?$")
-        looks_like_name = all(name_word_re.match(w) for w in words)
-        if looks_like_name:
-            # Check first word against stopwords
-            if words[0].lower() not in stopwords and words[0][0].isupper():
-                # Validate against names database if available
-                first_name = words[0].capitalize()
-                if is_likely_name(first_name):
-                    return ' '.join(w.capitalize() for w in words)
-
-    return None
+    # Try standalone name
+    return _extract_standalone_name(text_stripped)
 
 
 def build_chat_link(subdomain: str, chat_id: int) -> str:
