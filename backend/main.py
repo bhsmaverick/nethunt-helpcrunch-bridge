@@ -928,11 +928,20 @@ async def _process_sync_task(
     # Always add NetHunt contact URL to customData (no 255 char limit there)
     custom_data_updates.append({"property": "nethunt_contact_url", "value": contact_url})
 
+    # Send email/phone update separately from customData
+    # so customData failure doesn't block other updates
+    if hc_update_payload:
+        details_log.append(f"Bilateral sync: updating HelpCrunch customer profile {customer_id} with {list(hc_update_payload.keys())}...")
+        hc_updated, hc_error = await helpcrunch.update_customer(hc_api_key, customer_id, hc_update_payload)
+        if hc_updated:
+            details_log.append("HelpCrunch customer profile updated successfully.")
+        else:
+            details_log.append(f"Warning: HelpCrunch customer profile update failed. {hc_error}")
+
+    # Send customData separately
     if custom_data_updates:
-        # Merge with existing customData to avoid overwriting UTM/gclid/etc
         existing_custom_data = customer_data.get("customData") or []
         if isinstance(existing_custom_data, list):
-            # Copy to avoid mutating original customer_data
             merged_cd = [dict(item) if isinstance(item, dict) else item for item in existing_custom_data]
             existing_props = {item.get("property") for item in merged_cd if isinstance(item, dict)}
             for update in custom_data_updates:
@@ -943,9 +952,8 @@ async def _process_sync_task(
                         if isinstance(item, dict) and item.get("property") == update["property"]:
                             item["value"] = update["value"]
                             break
-            hc_update_payload["customData"] = merged_cd
+            cd_payload = {"customData": merged_cd}
         elif isinstance(existing_custom_data, dict):
-            # Convert dict format to list format for HC API compatibility
             merged_cd = [{"property": k, "value": v} for k, v in existing_custom_data.items()]
             existing_props = set(existing_custom_data.keys())
             for update in custom_data_updates:
@@ -956,20 +964,17 @@ async def _process_sync_task(
                         if item["property"] == update["property"]:
                             item["value"] = update["value"]
                             break
-            hc_update_payload["customData"] = merged_cd
+            cd_payload = {"customData": merged_cd}
         else:
-            hc_update_payload["customData"] = custom_data_updates
-        
-    if hc_update_payload:
-        details_log.append(f"Bilateral sync: updating HelpCrunch customer profile {customer_id} with {list(hc_update_payload.keys())}...")
-        if "customData" in hc_update_payload:
-            cd_props = [item.get("property") for item in hc_update_payload["customData"] if isinstance(item, dict)]
-            details_log.append(f"customData properties being sent: {cd_props}")
-        hc_updated, hc_error = await helpcrunch.update_customer(hc_api_key, customer_id, hc_update_payload)
-        if hc_updated:
-            details_log.append("HelpCrunch customer profile updated successfully.")
+            cd_payload = {"customData": custom_data_updates}
+
+        cd_props = [item.get("property") for item in cd_payload["customData"] if isinstance(item, dict)]
+        details_log.append(f"Updating HelpCrunch customData: {cd_props}...")
+        cd_updated, cd_error = await helpcrunch.update_customer(hc_api_key, customer_id, cd_payload)
+        if cd_updated:
+            details_log.append("HelpCrunch customData updated successfully.")
         else:
-            details_log.append(f"Warning: HelpCrunch customer profile update failed. {hc_error}")
+            details_log.append(f"Warning: HelpCrunch customData update failed. {cd_error}")
 
     # STEP 7: Fetch Deals
     deals = []
