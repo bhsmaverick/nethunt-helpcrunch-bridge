@@ -795,8 +795,6 @@ async def _process_sync_task(
         details_log.append("No matching contact found in NetHunt CRM. Creating a new contact card...")
         
         new_fields = {}
-        if name_nh_key and cust_name:
-            new_fields[name_nh_key] = cust_name
         if customer_id and hc_id_nh_key:
             new_fields[hc_id_nh_key] = str(customer_id)
         if merged_email and email_nh_key:
