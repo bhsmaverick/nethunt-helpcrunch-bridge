@@ -65,6 +65,8 @@ const refererNhInput = document.getElementById('referer-nh');
 const sourceNhInput = document.getElementById('source-nh');
 const countryNhInput = document.getElementById('country-nh');
 const cityNhInput = document.getElementById('city-nh');
+const branchNhInput = document.getElementById('branch-nh');
+const branchMappingInput = document.getElementById('branch-mapping');
 
 // Connection statuses
 const hcConnStatusDot = document.querySelector('#hc-conn-status .status-dot');
@@ -409,6 +411,8 @@ async function loadSettings() {
         sourceNhInput.value = settings.source_field_nh || 'Source';
         countryNhInput.value = settings.country_field_nh || 'Country';
         cityNhInput.value = settings.city_field_nh || 'City';
+        branchNhInput.value = settings.branch_field_nh || '';
+        branchMappingInput.value = settings.branch_mapping || '';
         
         checkboxUpdateNhChatLink.checked = settings.update_nh_chat_link === 'true';
         if (checkboxUpdateNhChatLink.checked) {
@@ -550,7 +554,8 @@ const nhFieldSelects = [
     { select: refererNhInput, settingKey: 'referer_field_nh', label: 'Referer' },
     { select: sourceNhInput, settingKey: 'source_field_nh', label: 'Source' },
     { select: countryNhInput, settingKey: 'country_field_nh', label: 'Country' },
-    { select: cityNhInput, settingKey: 'city_field_nh', label: 'City' }
+    { select: cityNhInput, settingKey: 'city_field_nh', label: 'City' },
+    { select: branchNhInput, settingKey: 'branch_field_nh', label: 'Філія' }
 ];
 
 async function loadFolderFields(folderId) {
@@ -742,7 +747,9 @@ document.getElementById('btn-save-settings').addEventListener('click', async () 
         referer_field_nh: refererNhInput.value.trim(),
         source_field_nh: sourceNhInput.value.trim(),
         country_field_nh: countryNhInput.value.trim(),
-        city_field_nh: cityNhInput.value.trim()
+        city_field_nh: cityNhInput.value.trim(),
+        branch_field_nh: branchNhInput.value.trim(),
+        branch_mapping: branchMappingInput.value.trim()
     };
     
     const saveStatus = document.getElementById('save-status-msg');

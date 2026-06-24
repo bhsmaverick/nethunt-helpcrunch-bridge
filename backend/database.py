@@ -187,7 +187,9 @@ def init_db():
         "referer_field_nh": "Referer",
         "source_field_nh": "Source",
         "country_field_nh": "Country",
-        "city_field_nh": "City"
+        "city_field_nh": "City",
+        "branch_field_nh": "",
+        "branch_mapping": ""
     }
     
     for key, val in defaults.items():

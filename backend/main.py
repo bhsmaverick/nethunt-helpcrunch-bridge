@@ -111,6 +111,8 @@ class SettingsUpdate(BaseModel):
     source_field_nh: Optional[str] = "Source"
     country_field_nh: Optional[str] = "Country"
     city_field_nh: Optional[str] = "City"
+    branch_field_nh: Optional[str] = ""
+    branch_mapping: Optional[str] = ""
 
 class TestConnectionRequest(BaseModel):
     email: Optional[str] = ""
@@ -437,6 +439,8 @@ async def _process_sync_task(
     source_f = settings.get("source_field_nh", "Source")
     country_f = settings.get("country_field_nh", "Country")
     city_f = settings.get("city_field_nh", "City")
+    branch_f = settings.get("branch_field_nh", "")
+    branch_mapping_str = settings.get("branch_mapping", "")
 
     customer_id = customer_data.get("id")
     if customer_id is not None:
@@ -673,6 +677,21 @@ async def _process_sync_task(
         tracking_fields[source_f] = detected_platform if detected_platform else (cust_source or "Organic/Direct")
     if country_f and cust_country: tracking_fields[country_f] = cust_country
     if city_f and cust_city: tracking_fields[city_f] = cust_city
+
+    # Branch detection: check source/referer URLs against branch mapping
+    if branch_f and branch_mapping_str:
+        try:
+            import json as _json
+            branch_map = _json.loads(branch_mapping_str)
+            if isinstance(branch_map, dict):
+                combined_urls = f"{cust_source} {cust_referer}".lower()
+                for keyword, branch_value in branch_map.items():
+                    if keyword.lower() in combined_urls:
+                        tracking_fields[branch_f] = branch_value
+                        details_log.append(f"Branch detected: '{branch_value}' (matched keyword '{keyword}' in source/referer)")
+                        break
+        except Exception:
+            logger.warning(f"Failed to parse branch_mapping setting: {branch_mapping_str}")
 
     # Build chat URL if we have all the pieces (use build_chat_link for consistency)
     chat_url = ""

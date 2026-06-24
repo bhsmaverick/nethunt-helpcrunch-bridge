@@ -419,6 +419,17 @@
                                         <option value="">Спочатку виберіть папку контактів...</option>
                                     </select>
                                 </div>
+                                <div class="form-group">
+                                    <label for="branch-nh">Поле NetHunt для Філії (Branch)</label>
+                                    <select id="branch-nh">
+                                        <option value="">Спочатку виберіть папку контактів...</option>
+                                    </select>
+                                </div>
+                                <div class="form-group full-width">
+                                    <label for="branch-mapping">Маппінг філій (JSON: ключове слово URL → назва філії)</label>
+                                    <textarea id="branch-mapping" rows="3" placeholder='{"advokatmarket": "Адвокат Маркет", "pozoff": "Позов"}'></textarea>
+                                    <small>Ключове слово шукається в URL джерела (source) та реферера (referer). Приклад: <code>{"advokatmarket": "Адвокат Маркет", "pozoff": "Позов"}</code></small>
+                                </div>
                             </div>
                         </div>
                     </div>
