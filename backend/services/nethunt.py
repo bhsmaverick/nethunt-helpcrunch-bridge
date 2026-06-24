@@ -86,21 +86,40 @@ async def find_contact(email: str, api_key: str, base_url: str, folder_id: str, 
         logger.exception(f"NetHunt search contact error for query '{query}':")
         return None
 
-async def get_contact(email: str, api_key: str, base_url: str, record_id: str) -> dict:
+async def get_contact(email: str, api_key: str, base_url: str, record_id: str, folder_id: str = None) -> dict:
     """
-    Fetches a single NetHunt record by its ID using the find-record endpoint.
+    Fetches a single NetHunt record by its ID.
+    Uses the find-record endpoint with the record ID as query.
     Returns the record dict or None if not found.
     """
     if not record_id:
         return None
-    # Use the read-record endpoint if available, otherwise search by recordId
-    url = f"{_clean_base_url(base_url)}/api/v1/zapier/triggers/read-record"
-    params = {"recordId": record_id}
     headers = _get_auth_headers(email, api_key)
-    
+
+    # Try the find-record endpoint with folder_id
+    if folder_id:
+        url = f"{_clean_base_url(base_url)}/api/v1/zapier/searches/find-record/{folder_id}"
+        params = {"query": record_id, "limit": 1}
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, headers=headers, params=params, timeout=10.0)
+                if response.status_code == 200:
+                    data = response.json()
+                    if isinstance(data, list) and len(data) > 0:
+                        for item in data:
+                            if item.get("id") == record_id:
+                                return item
+                        return data[0]
+                    elif isinstance(data, dict) and "id" in data:
+                        return data
+        except Exception:
+            logger.exception(f"NetHunt get_contact (find-record) error for record '{record_id}':")
+
+    # Fallback: try direct record endpoint
+    url = f"{_clean_base_url(base_url)}/api/v1/record/{record_id}"
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, headers=headers, params=params, timeout=10.0)
+            response = await client.get(url, headers=headers, timeout=10.0)
             if response.status_code == 200:
                 data = response.json()
                 if isinstance(data, dict) and "id" in data:
@@ -109,7 +128,7 @@ async def get_contact(email: str, api_key: str, base_url: str, record_id: str) -
                     return data[0]
             logger.warning(f"NetHunt get_contact status {response.status_code} for record '{record_id}': {response.text}")
             return None
-    except Exception as e:
+    except Exception:
         logger.exception(f"NetHunt get_contact error for record '{record_id}':")
         return None
 

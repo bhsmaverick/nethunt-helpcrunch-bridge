@@ -712,11 +712,13 @@ async def _process_sync_task(
     
     # Fetch fresh contact data from NetHunt to get current fields (local mirror may be stale)
     if contact_id and not is_new_contact:
-        fresh_contact = await nethunt.get_contact(nh_email, nh_key, nh_base, contact_id)
+        fresh_contact = await nethunt.get_contact(nh_email, nh_key, nh_base, contact_id, contacts_folder)
         if fresh_contact and fresh_contact.get("fields"):
             contact = fresh_contact
             contact_fields = contact.get("fields", {})
             details_log.append("Fetched fresh contact data from NetHunt API for bilateral sync.")
+        else:
+            details_log.append("Warning: could not fetch fresh contact data from NetHunt API (using cached data).")
     
     contact_name = contact.get("name") or sync_engine._first_value(contact_fields.get(name_nh_key)) or sync_engine._first_value(contact_fields.get("Name")) or cust_name
     details_log.append(f"Using NetHunt Contact: Name='{contact_name}', ID={contact_id} ({search_method_used})")
