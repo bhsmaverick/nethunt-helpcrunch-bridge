@@ -962,11 +962,14 @@ async def _process_sync_task(
         
     if hc_update_payload:
         details_log.append(f"Bilateral sync: updating HelpCrunch customer profile {customer_id} with {list(hc_update_payload.keys())}...")
-        hc_updated = await helpcrunch.update_customer(hc_api_key, customer_id, hc_update_payload)
+        if "customData" in hc_update_payload:
+            cd_props = [item.get("property") for item in hc_update_payload["customData"] if isinstance(item, dict)]
+            details_log.append(f"customData properties being sent: {cd_props}")
+        hc_updated, hc_error = await helpcrunch.update_customer(hc_api_key, customer_id, hc_update_payload)
         if hc_updated:
             details_log.append("HelpCrunch customer profile updated successfully.")
         else:
-            details_log.append("Warning: HelpCrunch customer profile update failed.")
+            details_log.append(f"Warning: HelpCrunch customer profile update failed. {hc_error}")
 
     # STEP 7: Fetch Deals
     deals = []
@@ -1004,9 +1007,9 @@ async def _process_sync_task(
         deals_text = "- No deals found (newly created contact card) -"
 
     # STEP 8: Write NetHunt lead link back to HelpCrunch notes (max 255 chars)
-    # Use short URL format for notes; full URL is in customData
+    # Full URL is in customData; notes just have a short reference
     card_prefix = "🟢 NEW" if is_new_contact else "🔴"
-    formatted_notes = f"{card_prefix} NetHunt: {contact_name} | {short_contact_url}"
+    formatted_notes = f"{card_prefix} NetHunt: {contact_name} (ID: {contact_id})"
     if len(formatted_notes) > 255:
         formatted_notes = formatted_notes[:252] + "..."
 

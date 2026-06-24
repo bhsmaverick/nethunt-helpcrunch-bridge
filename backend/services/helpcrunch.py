@@ -115,9 +115,10 @@ def verify_signature(raw_body: bytes, signature: str, secret: str) -> bool:
         logger.exception("Error verifying signature:")
         return False
 
-async def update_customer(api_key: str, customer_id: int, payload: dict) -> bool:
+async def update_customer(api_key: str, customer_id: int, payload: dict) -> tuple:
     """
     Updates general customer details in HelpCrunch (e.g. email, phone, customData).
+    Returns (success, error_detail).
     """
     url = f"https://api.helpcrunch.com/v1/customers/{customer_id}"
     headers = _get_headers(api_key)
@@ -126,12 +127,14 @@ async def update_customer(api_key: str, customer_id: int, payload: dict) -> bool
         async with httpx.AsyncClient() as client:
             response = await client.put(url, headers=headers, json=payload, timeout=10.0)
             if response.status_code in (200, 201):
-                return True
-            logger.warning(f"Failed to update HelpCrunch customer {customer_id}: Status {response.status_code}, Body {response.text}")
-            return False
+                return True, None
+            error_detail = f"Status {response.status_code}, Body {response.text}"
+            logger.warning(f"Failed to update HelpCrunch customer {customer_id}: {error_detail}")
+            return False, error_detail
     except Exception as e:
+        error_detail = str(e)
         logger.exception(f"HelpCrunch update customer error for {customer_id}:")
-        return False
+        return False, error_detail
 
 
 # --- Bulk / sync endpoints for local mirror ---
