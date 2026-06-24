@@ -2,7 +2,7 @@ import re
 import json
 import base64
 from typing import Optional
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 try:
     from .names_uk import NAMES_SET, is_likely_name
@@ -271,17 +271,18 @@ def build_chat_link(subdomain: str, chat_id: int) -> str:
 def build_nethunt_record_url(base_url: str, workspace_id: str, folder_id: str, record_id: str) -> str:
     """Builds a NetHunt CRM record URL in the correct web app format.
 
-    Format: {base_url}/web/#nethunt/{base64(json)}
+    Format: {base_url}/web/#nethunt/{base64(url_encode(json))}
     Where json = {"workspaceId":"...","folderId":"...","recordId":"...","recordPage":{"recordId":"..."}}
-    Note: No URL encoding — base64 of raw JSON is shorter and fits in 255 chars.
     """
     if not workspace_id or not folder_id or not record_id:
         return f"{base_url.rstrip('/')}/web/"
     payload = {
         "workspaceId": workspace_id,
         "folderId": folder_id,
-        "recordId": record_id
+        "recordId": record_id,
+        "recordPage": {"recordId": record_id}
     }
     json_str = json.dumps(payload, separators=(",", ":"))
-    b64_encoded = base64.b64encode(json_str.encode()).decode()
+    url_encoded = quote(json_str)
+    b64_encoded = base64.b64encode(url_encoded.encode()).decode()
     return f"{base_url.rstrip('/')}/web/#nethunt/{b64_encoded}"

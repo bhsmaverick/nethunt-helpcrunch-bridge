@@ -600,6 +600,8 @@ async def _process_sync_task(
     contact_fields = contact.get("fields", {})
     contact_name = contact.get("name") or sync_engine._first_value(contact_fields.get(name_nh_key)) or sync_engine._first_value(contact_fields.get("Name")) or cust_name
     details_log.append(f"Using NetHunt Contact: Name='{contact_name}', ID={contact_id} ({search_method_used})")
+    nh_field_keys = list(contact_fields.keys()) if contact_fields else []
+    details_log.append(f"NetHunt contact fields available: {nh_field_keys}")
 
     # --- STEP 4: Write chat link ---
     if update_nh_link and chat_url and not is_new_contact:
@@ -643,6 +645,13 @@ async def _process_sync_task(
             details_log.append(f"Pushing messenger name '{messenger_name}' to HelpCrunch customer profile.")
 
     nh_email_val = sync_engine._first_value(contact_fields.get(email_nh_key))
+    if not nh_email_val:
+        for alt_key in ("Email", "email", "Електронна пошта", "E-mail", "Email Address"):
+            if alt_key in contact_fields:
+                nh_email_val = sync_engine._first_value(contact_fields[alt_key])
+                if nh_email_val:
+                    details_log.append(f"Found email in NetHunt field '{alt_key}' (configured key '{email_nh_key}' didn't match)")
+                    break
     if nh_email_val and not cust_email and not merged_email:
         merged_email = nh_email_val
         details_log.append(f"Using email from NetHunt CRM: '{merged_email}'")
@@ -650,6 +659,13 @@ async def _process_sync_task(
         hc_update_payload["email"] = merged_email
 
     nh_phone_val = sync_engine._first_value(contact_fields.get(phone_nh_key))
+    if not nh_phone_val:
+        for alt_key in ("Phone", "phone", "Телефон", "Phone Number", "PhoneNumber", "Мобільний", "Mobile", "Tel"):
+            if alt_key in contact_fields:
+                nh_phone_val = sync_engine._first_value(contact_fields[alt_key])
+                if nh_phone_val:
+                    details_log.append(f"Found phone in NetHunt field '{alt_key}' (configured key '{phone_nh_key}' didn't match)")
+                    break
     if nh_phone_val and not cust_phone and not merged_phone:
         merged_phone = nh_phone_val
         details_log.append(f"Using phone from NetHunt CRM: '{merged_phone}'")
