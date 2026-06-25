@@ -1,6 +1,7 @@
 import httpx
 import base64
 import logging
+import re
 
 logger = logging.getLogger("bridge")
 
@@ -76,20 +77,21 @@ async def find_contact(email: str, api_key: str, base_url: str, folder_id: str, 
             response = await client.get(url, headers=headers, params=params, timeout=10.0)
             if response.status_code == 200:
                 data = response.json()
-                records = []
-                if isinstance(data, list):
-                    records = data
-                elif isinstance(data, dict) and "id" in data:
-                    records = [data]
-                elif isinstance(data, dict) and "data" in data and len(data["data"]) > 0:
-                    records = data["data"]
+                # Normalize so recordId maps to id for all downstream code
+                if isinstance(data, dict) and "data" in data:
+                    records = _normalize_records_response(data["data"])
+                else:
+                    records = _normalize_records_response(data)
                 
                 if not records:
                     return None
                 
                 # If validation requested, find the record that actually matches
                 if expected_field and expected_value:
-                    ev_lower = expected_value.strip().lower()
+                    def _norm(s):
+                        # Tolerant compare: drop @, spaces and phone punctuation
+                        return re.sub(r"[\s@()+\-.]", "", str(s).strip().lower())
+                    ev_norm = _norm(expected_value)
                     for rec in records:
                         fields = rec.get("fields", {}) or {}
                         raw = fields.get(expected_field)
@@ -97,7 +99,8 @@ async def find_contact(email: str, api_key: str, base_url: str, folder_id: str, 
                             continue
                         vals = raw if isinstance(raw, list) else [raw]
                         for v in vals:
-                            if str(v).strip().lower() == ev_lower:
+                            v_norm = _norm(v)
+                            if v_norm and ev_norm and v_norm == ev_norm:
                                 return rec
                     # No validated match found
                     logger.warning(f"NetHunt find_contact: query '{query}' returned {len(records)} records but none matched {expected_field}={expected_value!r}")
@@ -134,13 +137,9 @@ async def get_contact(email: str, api_key: str, base_url: str, record_id: str, f
             async with httpx.AsyncClient() as client:
                 response = await client.get(url, headers=headers, params=params, timeout=10.0)
                 if response.status_code == 200:
-                    data = response.json()
-                    if isinstance(data, list):
-                        for item in data:
-                            if _matches(item):
-                                return item
-                    elif isinstance(data, dict) and _matches(data):
-                        return data
+                    for item in _normalize_records_response(response.json()):
+                        if _matches(item):
+                            return item
         except Exception:
             logger.exception(f"NetHunt get_contact (find-record) error for record '{record_id}':")
 
@@ -150,13 +149,9 @@ async def get_contact(email: str, api_key: str, base_url: str, record_id: str, f
         async with httpx.AsyncClient() as client:
             response = await client.get(url, headers=headers, timeout=10.0)
             if response.status_code == 200:
-                data = response.json()
-                if isinstance(data, dict) and _matches(data):
-                    return data
-                elif isinstance(data, list):
-                    for item in data:
-                        if _matches(item):
-                            return item
+                for item in _normalize_records_response(response.json()):
+                    if _matches(item):
+                        return item
             logger.warning(f"NetHunt get_contact status {response.status_code} for record '{record_id}': {response.text}")
             return None
     except Exception:
@@ -315,6 +310,9 @@ def _normalize_records_response(data) -> list:
         items = data["data"]
     elif isinstance(data, dict) and isinstance(data.get("records"), list):
         items = data["records"]
+    elif isinstance(data, dict) and ("id" in data or "recordId" in data or "fields" in data):
+        # A single bare record dict (not wrapped in data/records)
+        items = [data]
     else:
         items = []
 
