@@ -656,6 +656,45 @@ async def _process_sync_task(
     # --- STEP 1: Search local mirror ---
     contact, search_method_used = await _search_local_mirror(chat_url, customer_id, details_log)
 
+    # --- Validate local mirror match against current HC customer's identifiers ---
+    # A corrupted match_link can bind HC customer A to NetHunt contact B.
+    # If B's stored identifiers (telegram, email, phone, HC-ID field) conflict
+    # with A's current values, the match is wrong — discard and re-search via API.
+    if contact:
+        def _id_norm(s):
+            return re.sub(r'[\s@()+\-.]', '', str(s).strip().lower())
+        cf = contact.get("fields", {}) or {}
+        def _cf_val(fk):
+            raw = cf.get(fk)
+            return _id_norm(sync_engine._first_value(raw)) if raw else ""
+        id_conflicts = []
+        if hc_id_nh_key:
+            nh_cid = _cf_val(hc_id_nh_key)
+            if nh_cid and _id_norm(str(customer_id)) and nh_cid != _id_norm(str(customer_id)):
+                id_conflicts.append(f"hc_id(HC:{customer_id} vs NH:{nh_cid})")
+        if telegram_nh_key and merged_telegram:
+            nh_tg = _cf_val(telegram_nh_key)
+            if nh_tg and nh_tg != _id_norm(merged_telegram):
+                id_conflicts.append(f"telegram(HC:{merged_telegram} vs NH:{nh_tg})")
+        if email_nh_key and merged_email:
+            nh_em = _cf_val(email_nh_key)
+            if nh_em and nh_em != _id_norm(merged_email):
+                id_conflicts.append(f"email conflict")
+        if phone_nh_key and merged_phone:
+            nh_ph = _cf_val(phone_nh_key)
+            if nh_ph and nh_ph != _id_norm(merged_phone):
+                id_conflicts.append(f"phone conflict")
+        if id_conflicts:
+            details_log.append(
+                f"Local mirror match DISCARDED — identifier conflicts with current HC customer: {id_conflicts}. "
+                f"Discarding NH contact '{contact.get('id')}' and re-searching via API."
+            )
+            logger.warning(
+                f"Discarding corrupted local mirror match for HC customer {customer_id}: {id_conflicts}"
+            )
+            contact = None
+            search_method_used = ""
+
     # --- STEP 2: Search NetHunt API ---
     if not contact:
         contact, search_method_used = await _search_nethunt_api(

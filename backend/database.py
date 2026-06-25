@@ -399,6 +399,13 @@ def save_nh_deal(nh_record_id, folder_id, contact_id, name, stage, amount, raw_j
 def save_match_link(hc_customer_id, nh_contact_id, matched_by, confidence="high"):
     conn = get_db_connection()
     cursor = conn.cursor()
+    # Remove any stale match for this HC customer pointing to a different NH contact.
+    # This self-heals corrupted match_links so that each HC customer maps to exactly
+    # one NH contact at a time.
+    cursor.execute(
+        "DELETE FROM match_links WHERE hc_customer_id = ? AND nh_contact_id != ?",
+        (hc_customer_id, nh_contact_id),
+    )
     cursor.execute("""
         INSERT INTO match_links (hc_customer_id, nh_contact_id, matched_by, confidence, created_at)
         VALUES (?, ?, ?, ?, ?)
