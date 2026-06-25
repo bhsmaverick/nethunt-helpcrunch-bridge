@@ -248,7 +248,8 @@ async def _search_nethunt_api(customer_id, merged_email, merged_phone, merged_te
     if hc_id_nh_key and customer_id:
         details_log.append(f"Searching NetHunt by HelpCrunch ID: '{customer_id}' (Field: '{hc_id_nh_key}')...")
         query_str = f'"{hc_id_nh_key}":"{customer_id}"'
-        contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, query_str)
+        contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, query_str,
+                                             expected_field=hc_id_nh_key, expected_value=str(customer_id))
         if contact:
             search_method = "HelpCrunch ID"
 
@@ -258,21 +259,24 @@ async def _search_nethunt_api(customer_id, merged_email, merged_phone, merged_te
             if step == "email" and merged_email and email_nh_key:
                 details_log.append(f"Searching NetHunt by Email: '{merged_email}' (Field: '{email_nh_key}')...")
                 query_str = f'"{email_nh_key}":"{merged_email}"'
-                contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, query_str)
+                contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, query_str,
+                                                     expected_field=email_nh_key, expected_value=merged_email)
                 if contact:
                     search_method = "Email"
                     break
             elif step == "phone" and merged_phone and phone_nh_key:
                 details_log.append(f"Searching NetHunt by Phone: '{merged_phone}' (Field: '{phone_nh_key}')...")
                 query_str = f'"{phone_nh_key}":"{merged_phone}"'
-                contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, query_str)
+                contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, query_str,
+                                                     expected_field=phone_nh_key, expected_value=merged_phone)
                 if contact:
                     search_method = "Phone"
                     break
             elif step == "telegram" and merged_telegram and telegram_nh_key:
                 details_log.append(f"Searching NetHunt by Telegram: '{merged_telegram}' (Field: '{telegram_nh_key}')...")
                 query_str = f'"{telegram_nh_key}":"{merged_telegram}"'
-                contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, query_str)
+                contact = await nethunt.find_contact(nh_email, nh_key, nh_base, contacts_folder, query_str,
+                                                     expected_field=telegram_nh_key, expected_value=merged_telegram)
                 if contact:
                     search_method = "Telegram"
                     break
@@ -753,13 +757,16 @@ async def _process_sync_task(
     details_log.append(f"NetHunt Contact Card URL: {contact_url}")
 
     # --- STEP 6: Bilateral sync to HelpCrunch (single combined PUT) ---
+    # Policy: never overwrite HC name; fill empty HC phone/email from NetHunt.
+    # HelpCrunch PUT replaces the entire object, so we must include existing
+    # HC values to prevent them from being cleared.
     hc_update_payload = {}
-    effective_name = contact_name if (contact_name and contact_name != "Unknown Customer") else (extracted_name or messenger_name or cust_name)
-    if effective_name:
-        hc_update_payload["name"] = effective_name
-        if effective_name != cust_name:
-            details_log.append(f"Pushing name '{effective_name}' to HelpCrunch customer profile.")
 
+    # name: preserve HC name, never overwrite with NetHunt name
+    if cust_name and cust_name != "Unknown Customer":
+        hc_update_payload["name"] = cust_name
+
+    # email: keep HC email if present, fill from NetHunt if empty
     nh_email_val = sync_engine._first_value(contact_fields.get(email_nh_key))
     if not nh_email_val:
         for alt_key in ("Email", "email", "Електронна пошта", "E-mail", "Email Address"):
@@ -768,12 +775,13 @@ async def _process_sync_task(
                 if nh_email_val:
                     details_log.append(f"Found email in NetHunt field '{alt_key}' (configured key '{email_nh_key}' didn't match)")
                     break
-    if nh_email_val and not cust_email and not merged_email:
+    if not cust_email and nh_email_val:
         merged_email = nh_email_val
         details_log.append(f"Using email from NetHunt CRM: '{merged_email}'")
     if merged_email:
         hc_update_payload["email"] = merged_email
 
+    # phone: keep HC phone if present, fill from NetHunt if empty
     nh_phone_val = sync_engine._first_value(contact_fields.get(phone_nh_key))
     if not nh_phone_val:
         for alt_key in ("Phone", "phone", "Телефон", "Phone Number", "PhoneNumber", "Мобільний", "Mobile", "Tel"):
@@ -782,7 +790,7 @@ async def _process_sync_task(
                 if nh_phone_val:
                     details_log.append(f"Found phone in NetHunt field '{alt_key}' (configured key '{phone_nh_key}' didn't match)")
                     break
-    if nh_phone_val and not cust_phone and not merged_phone:
+    if not cust_phone and nh_phone_val:
         merged_phone = nh_phone_val
         details_log.append(f"Using phone from NetHunt CRM: '{merged_phone}'")
     if merged_phone:

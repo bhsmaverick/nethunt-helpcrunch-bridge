@@ -53,17 +53,22 @@ async def list_folders(email: str, api_key: str, base_url: str) -> list:
         logger.exception("NetHunt list folders error:")
         return []
 
-async def find_contact(email: str, api_key: str, base_url: str, folder_id: str, query: str) -> dict:
+async def find_contact(email: str, api_key: str, base_url: str, folder_id: str, query: str,
+                       expected_field: str = None, expected_value: str = None) -> dict:
     """
     Searches for a contact by a query string.
     The query can be a raw search term or NetHunt search query (e.g. `Email:"value"`).
+    If expected_field and expected_value are provided, validates that the returned
+    record actually contains that value in that field (prevents false matches).
     Returns the first matching record or None if no match is found.
     """
     if not folder_id or not query:
         return None
         
     url = f"{_clean_base_url(base_url)}/api/v1/zapier/searches/find-record/{folder_id}"
-    params = {"query": query, "limit": 1}
+    # Use higher limit to scan multiple results if validation is needed
+    limit = 20 if expected_field else 1
+    params = {"query": query, "limit": limit}
     headers = _get_auth_headers(email, api_key)
     
     try:
@@ -71,12 +76,34 @@ async def find_contact(email: str, api_key: str, base_url: str, folder_id: str, 
             response = await client.get(url, headers=headers, params=params, timeout=10.0)
             if response.status_code == 200:
                 data = response.json()
-                if isinstance(data, list) and len(data) > 0:
-                    return data[0]
+                records = []
+                if isinstance(data, list):
+                    records = data
                 elif isinstance(data, dict) and "id" in data:
-                    return data
+                    records = [data]
                 elif isinstance(data, dict) and "data" in data and len(data["data"]) > 0:
-                    return data["data"][0]
+                    records = data["data"]
+                
+                if not records:
+                    return None
+                
+                # If validation requested, find the record that actually matches
+                if expected_field and expected_value:
+                    ev_lower = expected_value.strip().lower()
+                    for rec in records:
+                        fields = rec.get("fields", {}) or {}
+                        raw = fields.get(expected_field)
+                        if raw is None:
+                            continue
+                        vals = raw if isinstance(raw, list) else [raw]
+                        for v in vals:
+                            if str(v).strip().lower() == ev_lower:
+                                return rec
+                    # No validated match found
+                    logger.warning(f"NetHunt find_contact: query '{query}' returned {len(records)} records but none matched {expected_field}={expected_value!r}")
+                    return None
+                else:
+                    return records[0]
             elif response.status_code == 404:
                 # 404 is returned by NetHunt if no record matches the query
                 return None
@@ -89,12 +116,15 @@ async def find_contact(email: str, api_key: str, base_url: str, folder_id: str, 
 async def get_contact(email: str, api_key: str, base_url: str, record_id: str, folder_id: str = None) -> dict:
     """
     Fetches a single NetHunt record by its ID.
-    Uses the find-record endpoint with the record ID as query.
     Returns the record dict or None if not found.
+    Strictly matches by id or recordId — never returns a wrong record.
     """
     if not record_id:
         return None
     headers = _get_auth_headers(email, api_key)
+
+    def _matches(item):
+        return item.get("id") == record_id or item.get("recordId") == record_id
 
     # Try the find-record endpoint with folder_id and recordId param
     if folder_id:
@@ -105,12 +135,11 @@ async def get_contact(email: str, api_key: str, base_url: str, record_id: str, f
                 response = await client.get(url, headers=headers, params=params, timeout=10.0)
                 if response.status_code == 200:
                     data = response.json()
-                    if isinstance(data, list) and len(data) > 0:
+                    if isinstance(data, list):
                         for item in data:
-                            if item.get("id") == record_id:
+                            if _matches(item):
                                 return item
-                        return data[0]
-                    elif isinstance(data, dict) and "id" in data:
+                    elif isinstance(data, dict) and _matches(data):
                         return data
         except Exception:
             logger.exception(f"NetHunt get_contact (find-record) error for record '{record_id}':")
@@ -122,10 +151,12 @@ async def get_contact(email: str, api_key: str, base_url: str, record_id: str, f
             response = await client.get(url, headers=headers, timeout=10.0)
             if response.status_code == 200:
                 data = response.json()
-                if isinstance(data, dict) and "id" in data:
+                if isinstance(data, dict) and _matches(data):
                     return data
-                elif isinstance(data, list) and len(data) > 0:
-                    return data[0]
+                elif isinstance(data, list):
+                    for item in data:
+                        if _matches(item):
+                            return item
             logger.warning(f"NetHunt get_contact status {response.status_code} for record '{record_id}': {response.text}")
             return None
     except Exception:
