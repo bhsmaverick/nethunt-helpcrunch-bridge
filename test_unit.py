@@ -316,6 +316,128 @@ class TestBilateralSyncPayload:
         assert "+380226767676" not in payload.get("phone", "")
 
 
+# ─── 4b. _build_hc_update_payload (real function) ────────────────────────
+
+class TestBuildHcUpdatePayloadReal:
+    """Tests that call the actual _build_hc_update_payload from sync.py."""
+
+    @staticmethod
+    def _call(cust_name="Test", cust_email="", cust_phone="",
+              contact_fields=None, email_nh_key="Email", phone_nh_key="Phone",
+              merged_telegram="", telegram_handle="",
+              merged_instagram="", instagram_handle="",
+              contact_url="http://nh/record/1", contact_name="NH Name",
+              contact_id="rec_1", is_new_contact=False,
+              customer_data=None, telegram_hc_key="telegram"):
+        from backend.services.sync import _build_hc_update_payload
+        details_log = []
+        payload, eff_email, eff_phone = _build_hc_update_payload(
+            cust_name, cust_email, cust_phone,
+            contact_fields or {}, email_nh_key, phone_nh_key,
+            merged_telegram, telegram_handle,
+            merged_instagram, instagram_handle,
+            contact_url, contact_name, contact_id, is_new_contact,
+            customer_data or {}, telegram_hc_key,
+            details_log,
+        )
+        return payload, eff_email, eff_phone, details_log
+
+    def test_name_preserved_from_hc(self):
+        payload, *_ = self._call(cust_name="Sania @Clame24")
+        assert payload["name"] == "Sania @Clame24"
+
+    def test_name_not_overwritten_by_nh(self):
+        """Even with NH contact_name='Назаренко Петро', HC name wins."""
+        payload, *_ = self._call(cust_name="Sania", contact_name="Назаренко Петро")
+        assert payload["name"] == "Sania"
+        assert "Назар" not in payload["name"]
+
+    def test_unknown_customer_name_not_pushed(self):
+        payload, *_ = self._call(cust_name="Unknown Customer")
+        assert "name" not in payload
+
+    def test_hc_email_preserved_over_nh(self):
+        payload, eff_email, _, _ = self._call(
+            cust_email="hc@example.com",
+            contact_fields={"Email": ["nh@example.com"]},
+        )
+        assert payload["email"] == "hc@example.com"
+        assert eff_email == "hc@example.com"
+
+    def test_hc_email_empty_filled_from_nh(self):
+        payload, eff_email, _, _ = self._call(
+            cust_email="",
+            contact_fields={"Email": ["nh@example.com"]},
+        )
+        assert payload["email"] == "nh@example.com"
+        assert eff_email == "nh@example.com"
+
+    def test_hc_phone_preserved_over_nh(self):
+        payload, _, eff_phone, _ = self._call(
+            cust_phone="+380509998877",
+            contact_fields={"Phone": ["+380226767676"]},
+        )
+        assert payload["phone"] == "+380509998877"
+        assert "+380226767676" not in payload.get("phone", "")
+
+    def test_hc_phone_empty_filled_from_nh(self):
+        payload, _, eff_phone, _ = self._call(
+            cust_phone="",
+            contact_fields={"Phone": ["+380226767676"]},
+        )
+        assert payload["phone"] == "+380226767676"
+        assert eff_phone == "+380226767676"
+
+    def test_both_empty_no_phone_email(self):
+        payload, *_ = self._call(cust_email="", cust_phone="", contact_fields={})
+        assert "phone" not in payload
+        assert "email" not in payload
+
+    def test_nazarenko_bug_regression(self):
+        """The exact bug: two different TG users, NH returns Nazarenko's record."""
+        # Sania has his own HC phone, NH has Nazarenko's phone
+        payload, eff_email, eff_phone, log = self._call(
+            cust_name="Sania @Clame24",
+            cust_phone="",
+            contact_fields={"Phone": ["+380226767676"], "Email": ["nazarenko@example.com"]},
+            contact_name="Назаренко Петро",
+            contact_id="rec_nazarenko",
+        )
+        # Name must be Sania, not Nazarenko
+        assert payload["name"] == "Sania @Clame24"
+        # Phone from NH fills empty HC phone — but this is the BUG scenario:
+        # get_contact should have returned None, so this shouldn't happen in prod
+        # Still, the payload logic itself is correct: fill empty from NH
+        assert payload["phone"] == "+380226767676"
+
+    def test_notes_always_present(self):
+        payload, *_ = self._call(contact_name="Test Contact", contact_id="rec_123")
+        assert "notes" in payload
+        assert "rec_123" in payload["notes"]
+
+    def test_customdata_merged(self):
+        payload, *_ = self._call(
+            merged_telegram="sania_tg",
+            telegram_handle="",
+            customer_data={"customData": [{"property": "existing", "value": "val"}]},
+        )
+        cd = payload.get("customData", [])
+        props = {item.get("property") for item in cd if isinstance(item, dict)}
+        assert "existing" in props
+        assert "telegram" in props
+        assert "nethunt_contact_url1" in props
+
+    def test_customdata_telegram_not_duplicated(self):
+        """If telegram_handle already set in HC, don't add it again."""
+        payload, *_ = self._call(
+            merged_telegram="sania_tg",
+            telegram_handle="sania_tg",
+        )
+        cd = payload.get("customData", [])
+        tg_entries = [item for item in cd if isinstance(item, dict) and item.get("property") == "telegram"]
+        assert len(tg_entries) == 0  # telegram_handle already set, no update needed
+
+
 # ─── 5. save_match_link self-healing ──────────────────────────────────────
 
 class TestSaveMatchLink:

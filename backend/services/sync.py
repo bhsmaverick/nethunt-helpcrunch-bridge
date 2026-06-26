@@ -363,6 +363,111 @@ async def _update_existing_contact(contact, customer_id, merged_email, merged_ph
             details_log.append(f"Warning: Could not write additional info to NetHunt field '{notes_field_key}'.")
 
 
+def _build_hc_update_payload(
+    cust_name, cust_email, cust_phone,
+    contact_fields, email_nh_key, phone_nh_key,
+    merged_telegram, telegram_handle,
+    merged_instagram, instagram_handle,
+    contact_url, contact_name, contact_id, is_new_contact,
+    customer_data, telegram_hc_key,
+    details_log,
+) -> tuple:
+    """
+    Build the HelpCrunch update payload with a strict 'fill-empty, no-overwrite-name' policy.
+
+    - name: always uses HC name, never overwrites with NetHunt name.
+    - email/phone: keeps HC value if present, fills from NetHunt only if HC value is empty.
+    - customData: merges telegram/instagram/nethunt_contact_url into existing customData.
+    - notes: formatted NetHunt contact reference.
+
+    Returns (payload, effective_email, effective_phone).
+    """
+    payload = {}
+
+    # name: preserve HC name, never overwrite with NetHunt name
+    if cust_name and cust_name != "Unknown Customer":
+        payload["name"] = cust_name
+
+    # email: keep HC email if present, fill from NetHunt if empty
+    nh_email_val = sync_engine._first_value(contact_fields.get(email_nh_key))
+    if not nh_email_val:
+        for alt_key in ("Email", "email", "Електронна пошта", "E-mail", "Email Address"):
+            if alt_key in contact_fields:
+                nh_email_val = sync_engine._first_value(contact_fields[alt_key])
+                if nh_email_val:
+                    details_log.append(f"Found email in NetHunt field '{alt_key}' (configured key '{email_nh_key}' didn't match)")
+                    break
+    effective_email = cust_email if cust_email else (nh_email_val or "")
+    if not cust_email and nh_email_val:
+        details_log.append(f"Using email from NetHunt CRM: '{effective_email}'")
+    if effective_email:
+        payload["email"] = effective_email
+
+    # phone: keep HC phone if present, fill from NetHunt if empty
+    nh_phone_val = sync_engine._first_value(contact_fields.get(phone_nh_key))
+    if not nh_phone_val:
+        for alt_key in ("Phone", "phone", "Телефон", "Phone Number", "PhoneNumber", "Мобільний", "Mobile", "Tel"):
+            if alt_key in contact_fields:
+                nh_phone_val = sync_engine._first_value(contact_fields[alt_key])
+                if nh_phone_val:
+                    details_log.append(f"Found phone in NetHunt field '{alt_key}' (configured key '{phone_nh_key}' didn't match)")
+                    break
+    effective_phone = cust_phone if cust_phone else (nh_phone_val or "")
+    if not cust_phone and nh_phone_val:
+        details_log.append(f"Using phone from NetHunt CRM: '{effective_phone}'")
+    if effective_phone:
+        payload["phone"] = effective_phone
+
+    # --- Custom data updates ---
+    custom_data_updates = []
+    if merged_telegram and not telegram_handle:
+        custom_data_updates.append({"property": telegram_hc_key, "value": merged_telegram})
+    if merged_instagram and not instagram_handle:
+        custom_data_updates.append({"property": "instagram", "value": merged_instagram})
+    custom_data_updates.append({"property": "nethunt_contact_url1", "value": contact_url})
+    details_log.append(f"NetHunt contact URL to write: {contact_url} ({len(contact_url)} chars)")
+
+    # --- Notes ---
+    card_prefix = "🟢 NEW" if is_new_contact else "🔴"
+    formatted_notes = f"{card_prefix} NetHunt: {contact_name} (ID: {contact_id})"
+    if len(formatted_notes) > 255:
+        formatted_notes = formatted_notes[:252] + "..."
+
+    # --- Merge customData with existing ---
+    if custom_data_updates:
+        existing_custom_data = customer_data.get("customData") or []
+        if isinstance(existing_custom_data, list):
+            merged_cd = [dict(item) if isinstance(item, dict) else item for item in existing_custom_data]
+            existing_props = {item.get("property") for item in merged_cd if isinstance(item, dict)}
+            for update in custom_data_updates:
+                if update["property"] not in existing_props:
+                    merged_cd.append(update)
+                else:
+                    for item in merged_cd:
+                        if isinstance(item, dict) and item.get("property") == update["property"]:
+                            item["value"] = update["value"]
+                            break
+            payload["customData"] = merged_cd
+        elif isinstance(existing_custom_data, dict):
+            merged_cd = [{"property": k, "value": v} for k, v in existing_custom_data.items()]
+            existing_props = set(existing_custom_data.keys())
+            for update in custom_data_updates:
+                if update["property"] not in existing_props:
+                    merged_cd.append(update)
+                else:
+                    for item in merged_cd:
+                        if item["property"] == update["property"]:
+                            item["value"] = update["value"]
+                            break
+            payload["customData"] = merged_cd
+        else:
+            payload["customData"] = custom_data_updates
+
+    payload["notes"] = formatted_notes
+
+    return payload, effective_email, effective_phone
+
+
 async def _process_sync_task(
     event_type: str,
     customer_data: dict,
@@ -758,11 +863,12 @@ async def _process_sync_task(
     if contact_id and not is_new_contact:
         fresh_contact = await nethunt.get_contact(nh_email, nh_key, nh_base, contact_id, contacts_folder)
         if fresh_contact and fresh_contact.get("fields"):
+            fresh_id = fresh_contact.get("id") or fresh_contact.get("recordId")
             contact = fresh_contact
             contact_fields = contact.get("fields", {})
-            details_log.append("Fetched fresh contact data from NetHunt API for bilateral sync.")
+            details_log.append(f"Fetched fresh contact data from NetHunt API for bilateral sync (nh_record_id={fresh_id}).")
         else:
-            details_log.append("Warning: could not fetch fresh contact data from NetHunt API (using cached data).")
+            details_log.append(f"Warning: could not fetch fresh contact data from NetHunt API for record_id={contact_id} (using cached data).")
     
     contact_name = contact.get("name") or sync_engine._first_value(contact_fields.get(name_nh_key)) or sync_engine._first_value(contact_fields.get("Name")) or cust_name
     details_log.append(f"Using NetHunt Contact: Name='{contact_name}', ID={contact_id} ({search_method_used})")
@@ -799,88 +905,22 @@ async def _process_sync_task(
     # Policy: never overwrite HC name; fill empty HC phone/email from NetHunt.
     # HelpCrunch PUT replaces the entire object, so we must include existing
     # HC values to prevent them from being cleared.
-    hc_update_payload = {}
-
-    # name: preserve HC name, never overwrite with NetHunt name
-    if cust_name and cust_name != "Unknown Customer":
-        hc_update_payload["name"] = cust_name
-
-    # email: keep HC email if present, fill from NetHunt if empty
-    nh_email_val = sync_engine._first_value(contact_fields.get(email_nh_key))
-    if not nh_email_val:
-        for alt_key in ("Email", "email", "Електронна пошта", "E-mail", "Email Address"):
-            if alt_key in contact_fields:
-                nh_email_val = sync_engine._first_value(contact_fields[alt_key])
-                if nh_email_val:
-                    details_log.append(f"Found email in NetHunt field '{alt_key}' (configured key '{email_nh_key}' didn't match)")
-                    break
-    if not cust_email and nh_email_val:
-        merged_email = nh_email_val
-        details_log.append(f"Using email from NetHunt CRM: '{merged_email}'")
-    if merged_email:
-        hc_update_payload["email"] = merged_email
-
-    # phone: keep HC phone if present, fill from NetHunt if empty
-    nh_phone_val = sync_engine._first_value(contact_fields.get(phone_nh_key))
-    if not nh_phone_val:
-        for alt_key in ("Phone", "phone", "Телефон", "Phone Number", "PhoneNumber", "Мобільний", "Mobile", "Tel"):
-            if alt_key in contact_fields:
-                nh_phone_val = sync_engine._first_value(contact_fields[alt_key])
-                if nh_phone_val:
-                    details_log.append(f"Found phone in NetHunt field '{alt_key}' (configured key '{phone_nh_key}' didn't match)")
-                    break
-    if not cust_phone and nh_phone_val:
-        merged_phone = nh_phone_val
-        details_log.append(f"Using phone from NetHunt CRM: '{merged_phone}'")
-    if merged_phone:
-        hc_update_payload["phone"] = merged_phone
-
-    # --- Custom data updates ---
-    custom_data_updates = []
-    if merged_telegram and not telegram_handle:
-        custom_data_updates.append({"property": telegram_hc_key, "value": merged_telegram})
-    if merged_instagram and not instagram_handle:
-        custom_data_updates.append({"property": "instagram", "value": merged_instagram})
-    custom_data_updates.append({"property": "nethunt_contact_url1", "value": contact_url})
-    details_log.append(f"NetHunt contact URL to write: {contact_url} ({len(contact_url)} chars)")
-
-    # --- Notes ---
-    card_prefix = "🟢 NEW" if is_new_contact else "🔴"
-    formatted_notes = f"{card_prefix} NetHunt: {contact_name} (ID: {contact_id})"
-    if len(formatted_notes) > 255:
-        formatted_notes = formatted_notes[:252] + "..."
-
-    # --- Merge customData with existing (reuse full_profile if available) ---
-    if custom_data_updates:
-        existing_custom_data = customer_data.get("customData") or []
-        if isinstance(existing_custom_data, list):
-            merged_cd = [dict(item) if isinstance(item, dict) else item for item in existing_custom_data]
-            existing_props = {item.get("property") for item in merged_cd if isinstance(item, dict)}
-            for update in custom_data_updates:
-                if update["property"] not in existing_props:
-                    merged_cd.append(update)
-                else:
-                    for item in merged_cd:
-                        if isinstance(item, dict) and item.get("property") == update["property"]:
-                            item["value"] = update["value"]
-                            break
-            hc_update_payload["customData"] = merged_cd
-        elif isinstance(existing_custom_data, dict):
-            merged_cd = [{"property": k, "value": v} for k, v in existing_custom_data.items()]
-            existing_props = set(existing_custom_data.keys())
-            for update in custom_data_updates:
-                if update["property"] not in existing_props:
-                    merged_cd.append(update)
-                else:
-                    for item in merged_cd:
-                        if item["property"] == update["property"]:
-                            item["value"] = update["value"]
-                            break
-            hc_update_payload["customData"] = merged_cd
-        else:
-            hc_update_payload["customData"] = custom_data_updates
-
-    hc_update_payload["notes"] = formatted_notes
+    hc_update_payload, merged_email, merged_phone = _build_hc_update_payload(
+        cust_name, cust_email, cust_phone,
+        contact_fields, email_nh_key, phone_nh_key,
+        merged_telegram, telegram_handle,
+        merged_instagram, instagram_handle,
+        contact_url, contact_name, contact_id, is_new_contact,
+        customer_data, telegram_hc_key,
+        details_log,
+    )
+    formatted_notes = hc_update_payload.get("notes", "")
+    details_log.append(
+        f"Bilateral sync payload: name={'preserved' if 'name' in hc_update_payload else 'skipped'}, "
+        f"email={'pushed' if 'email' in hc_update_payload else 'skipped'}, "
+        f"phone={'pushed' if 'phone' in hc_update_payload else 'skipped'}, "
+        f"matched nh_record_id={contact_id}, search_method={search_method_used}"
+    )
 
     # --- Single combined PUT to HelpCrunch ---
     if hc_api_key and customer_id:
